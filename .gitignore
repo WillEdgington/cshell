@@ -1,0 +1,17 @@
+# Build Artifacts
+*.o
+*.d
+*.a
+
+# Compiled chttp binary
+cshell
+!cshell/
+
+# Dependency/Environment folders
+venv/
+deps/
+
+# Compiled test binaries
+tests/*
+!tests/*.c
+!tests/*.h
