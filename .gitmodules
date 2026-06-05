@@ -1,0 +1,5 @@
+# All dependencies belong in deps/ dir
+# Example layout:
+# [submodule "deps/$(dep_name)"]
+#     path = deps/$(dep_name)
+#     url = $(dep_url)
