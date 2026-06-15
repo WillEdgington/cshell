@@ -1,6 +1,8 @@
 #include "cshell/executor.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -31,9 +33,41 @@ static int execute_external(const Command *cmd) {
   }
 
   if (pid == 0) {
+    signal(SIGINT, SIG_DFL);
+    if (cmd->input_redirect != NULL) {
+      int in_fd = open(cmd->input_redirect, O_RDONLY);
+      if (in_fd == -1) {
+        perror("cshell: input redirection");
+        _exit(CHILD_EXEC_FAILURE);
+      }
+
+      if (dup2(in_fd, STDIN_FILENO) == -1) {
+        perror("cshell: dup2 input");
+        close(in_fd);
+        _exit(CHILD_EXEC_FAILURE);
+      }
+      close(in_fd);
+    }
+
+    if (cmd->output_redirect != NULL) {
+      int out_fd =
+          open(cmd->output_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (out_fd == -1) {
+        perror("cshell: output redirection");
+        _exit(CHILD_EXEC_FAILURE);
+      }
+
+      if (dup2(out_fd, STDOUT_FILENO) == -1) {
+        perror("cshell: dup2 output");
+        close(out_fd);
+        _exit(CHILD_EXEC_FAILURE);
+      }
+      close(out_fd);
+    }
+
     execvp(cmd->args[0], cmd->args);
     perror("cshell: external");
-    _exit(1); // clean deterministic failure exit
+    _exit(CHILD_EXEC_FAILURE);
   }
 
   int status;

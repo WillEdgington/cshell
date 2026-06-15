@@ -14,6 +14,7 @@ static void handle_shutdown(int sig) {
 }
 
 int main(void) {
+  signal(SIGINT, SIG_IGN);
   signal(SIGTERM, handle_shutdown);
 
   char line[MAX_LINE_LENGTH];
