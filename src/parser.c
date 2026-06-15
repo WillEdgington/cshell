@@ -1,6 +1,13 @@
 #include "cshell/parser.h"
 #include <string.h>
 
+static void command_init(Command *cmd) {
+  cmd->arg_count = 0;
+  cmd->is_background = 0;
+  cmd->input_redirect = NULL;
+  cmd->output_redirect = NULL;
+}
+
 // If *str is a delimeter (whitespace, \n, \t, \r) return 1 else 0
 static int is_delim(char *str) {
   if (*str == ' ' || *str == '\n' || *str == '\t' || *str == '\r')
@@ -95,7 +102,8 @@ static char *parse_token(char *str, Command *cmd) {
 }
 
 int cshell_parse_line(char *line, Command *cmd) {
-  cmd->arg_count = 0;
+  command_init(cmd);
+
   char *ptr = skip_delimeters(line);
   while (*ptr != '\0') {
     ptr = parse_token(ptr, cmd);
