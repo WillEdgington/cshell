@@ -49,7 +49,8 @@ static int tests_failed = 0;
     tests_run++;                                                               \
     if (actual == NULL || expected == NULL || strcmp(actual, expected) != 0) { \
       _ASSERT_FAIL("%s (Expected \"%s\", got \"%s\")", message,                \
-                   expected ? expected : "NULL", actual ? actual : "NULL");    \
+                   expected != NULL ? expected : "NULL",                       \
+                   actual != NULL ? actual : "NULL");                          \
     } else {                                                                   \
       printf(COLOR_GREEN "  [PASS] " COLOR_RESET "%s\n", message);             \
     }                                                                          \
