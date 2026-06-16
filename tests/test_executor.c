@@ -38,8 +38,7 @@ static void test_redirection(void) {
   Command echo_cmd = {.args = {"echo", "systems_programming", NULL},
                       .arg_count = 2,
                       .input_redirect = NULL,
-                      .output_redirect = (char *)src_file,
-                      .is_background = 0};
+                      .output_redirect = (char *)src_file};
 
   ASSERT_INT_EQ(cshell_execute(&echo_cmd), 0,
                 "Pipeline execution with output redirection should return 0");
@@ -63,8 +62,7 @@ static void test_redirection(void) {
   Command cat_cmd = {.args = {"cat", NULL},
                      .arg_count = 1,
                      .input_redirect = (char *)src_file,
-                     .output_redirect = (char *)dest_file,
-                     .is_background = 0};
+                     .output_redirect = (char *)dest_file};
 
   ASSERT_INT_EQ(cshell_execute(&cat_cmd), 0,
                 "Pipeline execution with dual redirection should return 0");
