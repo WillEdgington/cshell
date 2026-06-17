@@ -1,11 +1,21 @@
 #include "cshell/parser.h"
+#include <stdio.h>
 #include <string.h>
 
 static void command_init(Command *cmd) {
   cmd->arg_count = 0;
-  cmd->is_background = 0;
+  cmd->next = NULL;
   cmd->input_redirect = NULL;
   cmd->output_redirect = NULL;
+}
+
+static int command_cap(Command *cmd) {
+  if (cmd == NULL || cmd->arg_count == 0)
+    return -1;
+
+  cmd->args[cmd->arg_count] = NULL;
+  cmd->next = NULL;
+  return 0;
 }
 
 // If *str is a delimeter (whitespace, \n, \t, \r) return 1 else 0
@@ -17,7 +27,7 @@ static int is_delim(char *str) {
 
 // If *str is a valid shell symbol (&, <, >) return 1 else 0
 static int is_symbol(char *str) {
-  if (*str == '&' || *str == '>' || *str == '<')
+  if (*str == '&' || *str == '>' || *str == '<' || *str == '|')
     return 1;
   return 0;
 }
@@ -45,14 +55,17 @@ static char *skip_to_closing_quote(char *str) {
 }
 
 static char *parse_redirect(char *str, Command *cmd) {
+  char op = *str;
   char *start = skip_delimeters(str + 1);
   char *end = skip_to_end_of_token(start);
-  if (end == start)
+  if (end == start) {
+    fprintf(stderr, "cshell: syntax error near unexpected token '%c'\n", op);
     return NULL;
+  }
 
-  if (*str == '>') {
+  if (op == '>') {
     cmd->output_redirect = start;
-  } else if (*str == '<') {
+  } else if (op == '<') {
     cmd->input_redirect = start;
   }
 
@@ -60,17 +73,40 @@ static char *parse_redirect(char *str, Command *cmd) {
   return end;
 }
 
-static char *parse_is_background(char *str, Command *cmd) {
+static char *parse_is_background(char *str, Pipeline *pipe) {
   *str = '\0';
   str++;
 
-  cmd->is_background = 1;
+  pipe->is_background = 1;
+  return str;
+}
+
+static char *parse_new_cmd(char *str, Pipeline *pipe) {
+  *str = '\0';
+  str++;
+
+  if (command_cap(pipe->tail) == -1) {
+    fprintf(stderr, "cshell: syntax error near unexpected token '|'\n");
+    return NULL;
+  }
+
+  Command *next_cmd = arena_alloc(pipe->arena, sizeof(Command));
+  if (next_cmd == NULL) {
+    fprintf(stderr, "cshell: memory allocation failure inside arena\n");
+  }
+
+  pipe->tail->next = next_cmd;
+  pipe->tail = pipe->tail->next;
+  command_init(pipe->tail);
+  pipe->command_count++;
   return str;
 }
 
 static char *parse_arg(char *str, Command *cmd) {
-  if (cmd->arg_count == MAX_ARGS)
+  if (cmd->arg_count == MAX_ARGS) {
+    fprintf(stderr, "cshell: maximum argument limit exceeded (%d)\n", MAX_ARGS);
     return NULL;
+  }
 
   cmd->args[cmd->arg_count] = str;
   cmd->arg_count++;
@@ -78,41 +114,67 @@ static char *parse_arg(char *str, Command *cmd) {
   if (*str == '\"') {
     char *end = skip_to_closing_quote(str + 1);
 
-    if (*end == '\0')
+    if (*end == '\0') {
+      fprintf(stderr, "cshell: syntax error: unmatched double quote\n");
       return NULL;
+    }
 
     end++;
     if (is_delim(end) || is_symbol(end) || *end == '\0')
       return end;
+
+    fprintf(
+        stderr,
+        "cshell: syntax error: missing space delimiter after closing quote\n");
     return NULL;
   }
   return skip_to_end_of_token(str);
 }
 
-static char *parse_token(char *str, Command *cmd) {
+static char *parse_token(char *str, Pipeline *pipe) {
   switch (*str) {
   case '>':
   case '<':
-    return parse_redirect(str, cmd);
+    return parse_redirect(str, pipe->tail);
   case '&':
-    return parse_is_background(str, cmd);
+    return parse_is_background(str, pipe);
+  case '|':
+    return parse_new_cmd(str, pipe);
   default:
-    return parse_arg(str, cmd);
+    return parse_arg(str, pipe->tail);
   }
 }
 
-int cshell_parse_line(char *line, Command *cmd) {
-  command_init(cmd);
+void pipeline_init(Pipeline *pipe, Arena *a) {
+  pipe->arena = a;
+  pipe->head = (Command *)arena_alloc(a, sizeof(Command));
+  pipe->tail = pipe->head;
+  pipe->is_background = 0;
+  pipe->command_count = 1;
+  command_init(pipe->head);
+}
 
+int cshell_parse_line(char *line, Pipeline *pipe) {
   char *ptr = skip_delimeters(line);
+
+  if (*ptr == '\0') {
+    pipe->command_count = 0;
+    pipe->head->args[0] = NULL;
+    return 0;
+  }
+
   while (*ptr != '\0') {
-    ptr = parse_token(ptr, cmd);
+    ptr = parse_token(ptr, pipe);
     if (ptr == NULL) {
       return -1;
     }
     ptr = skip_delimeters(ptr);
   }
 
-  cmd->args[cmd->arg_count] = NULL;
+  if (command_cap(pipe->tail) == -1) {
+    fprintf(stderr,
+            "cshell: syntax error: dangling pipeline modifier sequence\n");
+    return -1;
+  }
   return 0;
 }

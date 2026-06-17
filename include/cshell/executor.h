@@ -14,6 +14,7 @@ typedef enum {
 } CommandType;
 
 CommandType cshell_resolve_command(const Command *cmd);
-int cshell_execute(Command *cmd);
+int cshell_execute_command(Command *cmd);
+int cshell_execute_pipeline(Pipeline *pipe);
 
 #endif
