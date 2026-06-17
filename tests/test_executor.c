@@ -1,5 +1,6 @@
 #include "cshell/executor.h"
 #include "cshell/test_framework.h"
+#include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -8,7 +9,7 @@ static void test_empty_arg(void) {
   ASSERT_INT_EQ(cshell_resolve_command(&cmd), CMD_TYPE_EMPTY,
                 "Empty argument (\"\") should resolve correctly");
   ASSERT_INT_EQ(
-      cshell_execute(&cmd), 0,
+      cshell_execute_command(&cmd), 0,
       "Empty argument (\"\") should return 0 immediately in execution");
 }
 
@@ -17,7 +18,7 @@ static void test_exit_arg(void) {
   ASSERT_INT_EQ(cshell_resolve_command(&cmd), CMD_TYPE_EXIT,
                 "Exit argument (\"exit\") should resolve correctly");
   ASSERT_INT_EQ(
-      cshell_execute(&cmd), SHELL_STATUS_EXIT,
+      cshell_execute_command(&cmd), SHELL_STATUS_EXIT,
       "Exit argument (\"exit\") should return SHELL_STATUS_EXIT in execution");
 }
 
@@ -40,7 +41,7 @@ static void test_redirection(void) {
                       .input_redirect = NULL,
                       .output_redirect = (char *)src_file};
 
-  ASSERT_INT_EQ(cshell_execute(&echo_cmd), 0,
+  ASSERT_INT_EQ(cshell_execute_command(&echo_cmd), 0,
                 "Pipeline execution with output redirection should return 0");
 
   FILE *src_f = fopen(src_file, "r");
@@ -64,7 +65,7 @@ static void test_redirection(void) {
                      .input_redirect = (char *)src_file,
                      .output_redirect = (char *)dest_file};
 
-  ASSERT_INT_EQ(cshell_execute(&cat_cmd), 0,
+  ASSERT_INT_EQ(cshell_execute_command(&cat_cmd), 0,
                 "Pipeline execution with dual redirection should return 0");
 
   FILE *dst_f = fopen(dest_file, "r");
@@ -102,10 +103,101 @@ static void test_all_args(void) {
   test_external_arg();
 }
 
+static void test_two_stage_pipeline(void) {
+  Command cmd2 = {
+      .args = {"grep", "systems", NULL}, .arg_count = 2, .next = NULL};
+  Command cmd1 = {.args = {"echo", "systems_programming", NULL},
+                  .arg_count = 2,
+                  .next = &cmd2};
+  Pipeline pipe = {
+      .head = &cmd1, .tail = &cmd2, .command_count = 2, .is_background = 0};
+
+  int saved_stderr = dup(STDOUT_FILENO);
+  int dev_null = open("/dev/null", O_WRONLY);
+
+  if (dev_null >= 0) {
+    dup2(dev_null, STDOUT_FILENO);
+    close(dev_null);
+  }
+
+  int status = cshell_execute_pipeline(&pipe);
+
+  if (saved_stderr >= 0) {
+    dup2(saved_stderr, STDOUT_FILENO);
+    close(saved_stderr);
+  }
+
+  ASSERT_INT_EQ(status, 0,
+                "Basic pipeline (\"echo systems_programming | grep\") should "
+                "return with status 0");
+}
+
+static void test_pipeline_terminal_status(void) {
+  Command cmd2_a = {.args = {"false", NULL}, .arg_count = 1, .next = NULL};
+  Command cmd1_a = {.args = {"true", NULL}, .arg_count = 1, .next = &cmd2_a};
+  Pipeline pipe_a = {
+      .head = &cmd1_a, .tail = &cmd2_a, .command_count = 2, .is_background = 0};
+
+  ASSERT_INT_EQ(
+      cshell_execute_pipeline(&pipe_a), 1,
+      "Pipeline (\"true | false\") must return terminal exit status 1");
+
+  Command cmd2_b = {.args = {"true", NULL}, .arg_count = 1, .next = NULL};
+  Command cmd1_b = {.args = {"false", NULL}, .arg_count = 1, .next = &cmd2_b};
+  Pipeline pipe_b = {
+      .head = &cmd1_b, .tail = &cmd2_b, .command_count = 2, .is_background = 0};
+
+  ASSERT_INT_EQ(
+      cshell_execute_pipeline(&pipe_b), 0,
+      "Pipeline (\"false | true\") must return terminal exit status 0");
+}
+
+static void test_pipeline_with_redirection(void) {
+  const char *out_file = "_test_pipeline_out_92837554.txt";
+  unlink(out_file);
+
+  Command cmd3 = {.args = {"cat", NULL},
+                  .arg_count = 1,
+                  .output_redirect = (char *)out_file,
+                  .next = NULL};
+  Command cmd2 = {.args = {"cat", NULL}, .arg_count = 1, .next = &cmd3};
+  Command cmd1 = {
+      .args = {"echo", "pipeline_test", NULL}, .arg_count = 2, .next = &cmd2};
+  Pipeline pipe = {
+      .head = &cmd1, .tail = &cmd3, .command_count = 3, .is_background = 0};
+
+  ASSERT_INT_EQ(cshell_execute_pipeline(&pipe), 0,
+                "Pipeline with trailing redirection should return 0");
+
+  FILE *f = fopen(out_file, "r");
+  ASSERT_PTR_NOT_NULL(
+      f, "Pipeline output redirection file should have been created");
+
+  char buffer[64];
+  if (f != NULL) {
+    char *fgets_res = fgets(buffer, sizeof(buffer), f);
+    fclose(f);
+
+    ASSERT_PTR_NOT_NULL(fgets_res,
+                        "Should be able to read data from pipeline target");
+    ASSERT_STR_EQ(buffer, "pipeline_test\n",
+                  "File content must match original upstream payload");
+  }
+
+  unlink(out_file);
+}
+
+static void test_pipeline_execution(void) {
+  test_two_stage_pipeline();
+  test_pipeline_terminal_status();
+  test_pipeline_with_redirection();
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
   test_all_args();
+  test_pipeline_execution();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;
