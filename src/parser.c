@@ -164,6 +164,11 @@ int cshell_parse_line(char *line, Pipeline *pipe) {
   }
 
   while (*ptr != '\0') {
+    if (pipe->is_background == 1) {
+      fprintf(stderr, "cshell: syntax error: non-trailing '&'\n");
+      return -1;
+    }
+
     ptr = parse_token(ptr, pipe);
     if (ptr == NULL) {
       return -1;

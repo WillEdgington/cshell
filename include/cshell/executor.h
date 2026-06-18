@@ -3,8 +3,8 @@
 
 #include "cshell/parser.h"
 
-#define SHELL_STATUS_EXIT 2
-#define CHILD_EXEC_FAILURE 1
+#define SHELL_STATUS_EXIT 256
+#define CHILD_EXEC_FAILURE 127
 
 typedef enum {
   CMD_TYPE_EMPTY,
@@ -16,5 +16,7 @@ typedef enum {
 CommandType cshell_resolve_command(const Command *cmd);
 int cshell_execute_command(Command *cmd);
 int cshell_execute_pipeline(Pipeline *pipe);
+
+void cshell_init_signals(void);
 
 #endif

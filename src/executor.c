@@ -1,3 +1,5 @@
+#define _GNU_SOURCE // expose linux and posix-specific APIs to compiler
+
 #include "cshell/executor.h"
 
 #include <errno.h>
@@ -7,6 +9,30 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+static void handle_sigchld(int sig) {
+  (void)sig;
+  int saved_errno = errno;
+  int status;
+
+  while (waitpid(-1, &status, WNOHANG) > 0) {
+    // WNOHANG: non-blocking
+  }
+
+  errno = saved_errno;
+}
+
+void cshell_init_signals(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+
+  sa.sa_handler = handle_sigchld;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+
+  if (sigaction(SIGCHLD, &sa, NULL) == -1)
+    perror("cshell: sigaction registration failed");
+}
 
 static int execute_cd(const Command *cmd) {
   if (cmd->arg_count == 1) {
@@ -178,6 +204,15 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
   pid_t last_pid = -1;
   Command *cmd = pipeline->head;
 
+  sigset_t set, old_set;
+  sigemptyset(&set);
+  sigaddset(&set, SIGCHLD);
+
+  if (sigprocmask(SIG_BLOCK, &set, &old_set) == -1) {
+    perror("cshell: sigprocmask block failure");
+    return -1;
+  }
+
   for (int i = 0; i < pipeline->command_count; i++) {
     int tunnel[2] = {-1, -1};
 
@@ -195,6 +230,7 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
     }
 
     if (pid == 0) {
+      sigprocmask(SIG_SETMASK, &old_set, NULL);
       signal(SIGINT, SIG_DFL);
       setup_child_io(cmd, prev_read_fd, tunnel);
       execute_child_dispatch(cmd);
@@ -206,7 +242,16 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
     cmd = cmd->next;
   }
 
-  return reap_pipeline(last_pid, pipeline->command_count);
+  if (pipeline->is_background) {
+    printf("[%d]\n", last_pid);
+    fflush(stdout);
+    sigprocmask(SIG_SETMASK, &old_set, NULL);
+    return 0;
+  }
+
+  int status = reap_pipeline(last_pid, pipeline->command_count);
+  sigprocmask(SIG_SETMASK, &old_set, NULL);
+  return status;
 }
 
 CommandType cshell_resolve_command(const Command *cmd) {
@@ -240,7 +285,10 @@ int cshell_execute_pipeline(Pipeline *pipe) {
   if (pipe == NULL || pipe->command_count == 0)
     return 0;
 
-  if (pipe->command_count == 1)
-    return cshell_execute_command(pipe->head);
+  if (pipe->command_count == 1) {
+    CommandType type = cshell_resolve_command(pipe->head);
+    if (type == CMD_TYPE_EMPTY || type == CMD_TYPE_EXIT || type == CMD_TYPE_CD)
+      return cshell_execute_command(pipe->head);
+  }
   return execute_multi_cmd_pipeline(pipe);
 }

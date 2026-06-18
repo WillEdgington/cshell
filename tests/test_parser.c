@@ -184,6 +184,11 @@ static void test_syntax_errors(Arena *a) {
   ASSERT_INT_EQ(cshell_parse_line(err_line4, &pipe), -1,
                 "Dangling pipe execution statement must error");
 
+  char err_line5[] = "echo & hello";
+  pipeline_init(&pipe, a);
+  ASSERT_INT_EQ(cshell_parse_line(err_line5, &pipe), -1,
+                "non-trailing '&' in line must error");
+
   if (saved_stderr >= 0) {
     dup2(saved_stderr, STDERR_FILENO);
     close(saved_stderr);

@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,8 @@ int main(void) {
   Arena arena;
 
   arena_init(&arena, PIPELINE_ARENA_SLAB_SIZE);
+  cshell_init_signals();
+
   while (1) {
     arena_reset(&arena);
     pipeline_init(&pipe, &arena);
@@ -37,8 +40,13 @@ int main(void) {
     printf("cshell> ");
     fflush(stdout);
 
-    if (fgets(line, sizeof(line), stdin) == NULL)
-      handle_exit(SIGTERM, &arena);
+    if (fgets(line, sizeof(line), stdin) == NULL) {
+      if (errno != EINTR) {
+        handle_exit(SIGTERM, &arena);
+      }
+      errno = 0;
+      continue;
+    }
 
     if (cshell_parse_line(line, &pipe) == -1)
       continue;
