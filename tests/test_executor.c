@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include "cshell/executor.h"
 #include "cshell/test_framework.h"
 #include <fcntl.h>
@@ -187,10 +189,37 @@ static void test_pipeline_with_redirection(void) {
   unlink(out_file);
 }
 
+static void test_background_pipeline(void) {
+  cshell_init_signals();
+
+  Command cmd = {.args = {"sleep", "0.1", NULL}, .arg_count = 2, .next = NULL};
+  Pipeline pipe = {
+      .head = &cmd, .tail = &cmd, .command_count = 1, .is_background = 1};
+
+  int saved_stdout = dup(STDOUT_FILENO);
+  int dev_null = open("/dev/null", O_WRONLY);
+  if (dev_null >= 0) {
+    dup2(dev_null, STDOUT_FILENO);
+    close(dev_null);
+  }
+
+  int status = cshell_execute_pipeline(&pipe);
+
+  if (saved_stdout >= 0) {
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+  }
+
+  ASSERT_INT_EQ(status, 0,
+                "Background pipeline must return 0 immediately to parent");
+  usleep(150000);
+}
+
 static void test_pipeline_execution(void) {
   test_two_stage_pipeline();
   test_pipeline_terminal_status();
   test_pipeline_with_redirection();
+  test_background_pipeline();
 }
 
 int main(void) {
