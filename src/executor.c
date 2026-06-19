@@ -1,6 +1,7 @@
 #define _GNU_SOURCE // expose linux and posix-specific APIs to compiler
 
 #include "cshell/executor.h"
+#include "cshell/tracker.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -10,16 +11,36 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+static void serialise_pipeline(const Pipeline *pipe, char *buf,
+                               size_t max_len) {
+  buf[0] = '\0';
+  size_t cur_len = 0;
+
+  for (Command *cmd = pipe->head; cmd != NULL; cmd = cmd->next) {
+    for (int i = 0; i < cmd->arg_count && cmd->args[i] != NULL; i++) {
+      size_t arg_len = strlen(cmd->args[i]);
+      if (cur_len + arg_len + 4 >= max_len)
+        break;
+      if (cur_len > 0) {
+        strcat(buf, " ");
+        cur_len++;
+      }
+      strcat(buf, cmd->args[i]);
+      cur_len += arg_len;
+    }
+
+    if (cmd->next != NULL && cur_len + 3 < max_len) {
+      strcat(buf, " |");
+      cur_len += 2;
+    }
+  }
+  if (pipe->is_background && cur_len + 3 < max_len)
+    strcat(buf, " &");
+}
+
 static void handle_sigchld(int sig) {
   (void)sig;
-  int saved_errno = errno;
-  int status;
-
-  while (waitpid(-1, &status, WNOHANG) > 0) {
-    // WNOHANG: non-blocking
-  }
-
-  errno = saved_errno;
+  // Do nothing: let tracker module handle reaping synchronously
 }
 
 void cshell_init_signals(void) {
@@ -186,12 +207,27 @@ static void update_parent_fds(int *prev_read_fd, int tunnel[2], int has_next) {
   }
 }
 
-static int reap_pipeline(pid_t last_pid, int command_count) {
+static int handle_background_branch(Pipeline *pipe, pid_t last_pid,
+                                    sigset_t old_set) {
+  char cmd_str[MAX_CMD_STRING_LEN + 1];
+  serialise_pipeline(pipe, cmd_str, sizeof(cmd_str));
+
+  int job_id = cshell_tracker_add(last_pid, cmd_str);
+  if (job_id != -1) {
+    printf("[%d] %d\n", job_id, (int)last_pid);
+    fflush(stdout);
+  }
+
+  sigprocmask(SIG_SETMASK, &old_set, NULL);
+  return 0;
+}
+
+static int reap_pipeline(pid_t *pids, pid_t last_pid, int command_count) {
   int status;
   int terminal_exit_status = -1;
 
   for (int i = 0; i < command_count; i++) {
-    pid_t reaped_pid = wait(&status);
+    pid_t reaped_pid = waitpid(pids[i], &status, 0);
     if (reaped_pid == last_pid) {
       terminal_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     }
@@ -203,6 +239,13 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
   int prev_read_fd = STDIN_FILENO;
   pid_t last_pid = -1;
   Command *cmd = pipeline->head;
+
+  pid_t pids[MAX_JOBS];
+  if (pipeline->command_count > MAX_JOBS) {
+    fprintf(stderr, "cshell: pipeline exceeds max job tracking capacity (%d)\n",
+            MAX_JOBS);
+    return -1;
+  }
 
   sigset_t set, old_set;
   sigemptyset(&set);
@@ -238,18 +281,15 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
 
     update_parent_fds(&prev_read_fd, tunnel, cmd->next != NULL ? 1 : 0);
 
+    pids[i] = pid;
     last_pid = pid;
     cmd = cmd->next;
   }
 
-  if (pipeline->is_background) {
-    printf("[%d]\n", last_pid);
-    fflush(stdout);
-    sigprocmask(SIG_SETMASK, &old_set, NULL);
-    return 0;
-  }
+  if (pipeline->is_background)
+    return handle_background_branch(pipeline, last_pid, old_set);
 
-  int status = reap_pipeline(last_pid, pipeline->command_count);
+  int status = reap_pipeline(pids, last_pid, pipeline->command_count);
   sigprocmask(SIG_SETMASK, &old_set, NULL);
   return status;
 }
