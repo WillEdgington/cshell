@@ -10,7 +10,8 @@ typedef enum {
   CMD_TYPE_EMPTY,
   CMD_TYPE_EXIT,
   CMD_TYPE_CD,
-  CMD_TYPE_EXTERNAL
+  CMD_TYPE_EXTERNAL,
+  CMD_TYPE_EXPORT
 } CommandType;
 
 CommandType cshell_resolve_command(const Command *cmd);
