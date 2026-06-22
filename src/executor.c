@@ -1,12 +1,14 @@
 #define _GNU_SOURCE // expose linux and posix-specific APIs to compiler
 
 #include "cshell/executor.h"
+#include "cshell/expansion.h"
 #include "cshell/tracker.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -132,6 +134,30 @@ static int execute_external_with_subshell_creation(const Command *cmd) {
   return -1;
 }
 
+static int execute_export(const Command *cmd) {
+  if (cmd->arg_count < 2) {
+    fprintf(stderr, "cshell: export: missing assignment statement\n");
+    return -1;
+  }
+
+  char *assignment = cmd->args[1];
+  char *delim = strchr(assignment, '=');
+  if (delim == NULL) {
+    fprintf(stderr, "cshell: export: invalid syntax, expected NAME=VALUE\n");
+    return -1;
+  }
+
+  *delim = '\0';
+  char *key = assignment;
+  char *value = delim + 1;
+
+  if (setenv(key, value, 1) == -1) {
+    perror("cshell: export");
+    return -1;
+  }
+  return 0;
+}
+
 static void setup_child_io(const Command *cmd, int prev_read_fd,
                            int tunnel[2]) {
   if (prev_read_fd != STDIN_FILENO) {
@@ -192,6 +218,8 @@ static void execute_child_dispatch(const Command *cmd) {
   case CMD_TYPE_EXTERNAL:
     execute_external(cmd);
     break;
+  case CMD_TYPE_EXPORT:
+    _exit(execute_export(cmd) == 0 ? 0 : CHILD_EXEC_FAILURE);
   default:
     _exit(CHILD_EXEC_FAILURE);
   }
@@ -220,6 +248,24 @@ static int handle_background_branch(Pipeline *pipe, pid_t last_pid,
 
   sigprocmask(SIG_SETMASK, &old_set, NULL);
   return 0;
+}
+
+static void cleanup_fork_failure(pid_t *pids, int prev_read_fd, int tunnel[2],
+                                 int pid_count, sigset_t old_set) {
+  if (prev_read_fd != STDIN_FILENO)
+    close(prev_read_fd);
+  if (tunnel[0] != -1)
+    close(tunnel[0]);
+  if (tunnel[1] != -1)
+    close(tunnel[1]);
+
+  for (int i = 0; i < pid_count; i++) {
+    kill(pids[i], SIGTERM);
+    int dummy;
+    waitpid(pids[i], &dummy, 0);
+  }
+
+  sigprocmask(SIG_SETMASK, &old_set, NULL);
 }
 
 static int reap_pipeline(pid_t *pids, pid_t last_pid, int command_count) {
@@ -269,6 +315,7 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
     pid_t pid = fork();
     if (pid < 0) {
       perror("cshell: fork failure");
+      cleanup_fork_failure(pids, prev_read_fd, tunnel, i, old_set);
       return -1;
     }
 
@@ -301,6 +348,8 @@ CommandType cshell_resolve_command(const Command *cmd) {
     return CMD_TYPE_EXIT;
   } else if (strcmp(cmd->args[0], "cd") == 0) {
     return CMD_TYPE_CD;
+  } else if (strcmp(cmd->args[0], "export") == 0) {
+    return CMD_TYPE_EXPORT;
   }
   return CMD_TYPE_EXTERNAL;
 }
@@ -315,6 +364,8 @@ int cshell_execute_command(Command *cmd) {
     return execute_cd(cmd);
   case CMD_TYPE_EXTERNAL:
     return execute_external_with_subshell_creation(cmd);
+  case CMD_TYPE_EXPORT:
+    return execute_export(cmd);
   default:
     fprintf(stderr, "cshell: excecute: unknown command type\n");
     return -1;
@@ -325,9 +376,12 @@ int cshell_execute_pipeline(Pipeline *pipe) {
   if (pipe == NULL || pipe->command_count == 0)
     return 0;
 
+  if (cshell_expand_pipeline(pipe) == -1)
+    return -1;
+
   if (pipe->command_count == 1) {
     CommandType type = cshell_resolve_command(pipe->head);
-    if (type == CMD_TYPE_EMPTY || type == CMD_TYPE_EXIT || type == CMD_TYPE_CD)
+    if (type != CMD_TYPE_EXTERNAL)
       return cshell_execute_command(pipe->head);
   }
   return execute_multi_cmd_pipeline(pipe);
