@@ -4,6 +4,7 @@
 #include "cshell/test_framework.h"
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 static void test_empty_arg(void) {
@@ -222,11 +223,75 @@ static void test_pipeline_execution(void) {
   test_background_pipeline();
 }
 
+static void test_export_resolution(void) {
+  Command cmd = {.args = {"export", "MY_VAR_19493857=value", NULL},
+                 .arg_count = 2};
+  ASSERT_INT_EQ(cshell_resolve_command(&cmd), CMD_TYPE_EXPORT,
+                "Export statement should resolve to CMD_TYPE_EXPORT");
+}
+
+static void test_export_execution_parent_context(void) {
+  char kv_arg[] = "PARENT_VAR_59382712=isolated_test";
+  Command cmd = {.args = {"export", kv_arg, NULL}, .arg_count = 2};
+
+  int status = cshell_execute_command(&cmd);
+  ASSERT_INT_EQ(status, 0,
+                "Executing isolated export in parent should return 0");
+
+  char *val = getenv("PARENT_VAR_59382712");
+  ASSERT_PTR_NOT_NULL(
+      val, "Environment variable should be visible in parent context");
+  if (val != NULL) {
+    ASSERT_STR_EQ(val, "isolated_test",
+                  "Environment variable value must match assignment string");
+  }
+  unsetenv("PARENT_VAR_59382712");
+}
+
+static void test_export_subshell_isolation(void) {
+  char kv_arg[] = "SUBSHELL_VAR_12485492=should_not_leak";
+  Command cmd2 = {.args = {"cat", NULL}, .arg_count = 1, .next = NULL};
+  Command cmd1 = {
+      .args = {"export", kv_arg, NULL}, .arg_count = 2, .next = &cmd2};
+
+  Pipeline pipe = {
+      .head = &cmd1, .tail = &cmd2, .command_count = 2, .is_background = 0};
+
+  int saved_stdout = dup(STDOUT_FILENO);
+  int dev_null = open("/dev/null", O_WRONLY);
+  if (dev_null >= 0) {
+    dup2(dev_null, STDOUT_FILENO);
+    close(dev_null);
+  }
+
+  int status = cshell_execute_pipeline(&pipe);
+
+  if (saved_stdout >= 0) {
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+  }
+
+  ASSERT_INT_EQ(
+      status, 0,
+      "Pipeline containing export built-in should complete with status 0");
+
+  char *val = getenv("SUBSHELL_VAR_12485492");
+  ASSERT_PTR_NULL(val, "Variables mutated inside a pipeline subshell must not "
+                       "leak into the parent shell environment");
+}
+
+void test_export(void) {
+  test_export_resolution();
+  test_export_execution_parent_context();
+  test_export_subshell_isolation();
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
   test_all_args();
   test_pipeline_execution();
+  test_export();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;
