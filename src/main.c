@@ -7,6 +7,7 @@
 #include "clib/arena.h"
 #include "cshell/executor.h"
 #include "cshell/parser.h"
+#include "cshell/prompt.h"
 #include "cshell/tracker.h"
 
 #define MAX_LINE_LENGTH 4096
@@ -40,8 +41,7 @@ int main(void) {
     pipeline_init(&pipe, &arena);
     cshell_tracker_report_and_clean();
 
-    printf("cshell> ");
-    fflush(stdout);
+    cshell_display_prompt();
 
     if (fgets(line, sizeof(line), stdin) == NULL) {
       if (errno != EINTR) {
