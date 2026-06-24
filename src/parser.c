@@ -108,17 +108,20 @@ static char *parse_arg(char *str, Command *cmd) {
     return NULL;
   }
 
-  cmd->args[cmd->arg_count] = str;
-  cmd->arg_count++;
-
   if (*str == '\"') {
-    char *end = skip_to_closing_quote(str + 1);
+    *str = '\0';
+    str++;
+
+    cmd->args[cmd->arg_count] = str;
+    cmd->arg_count++;
+    char *end = skip_to_closing_quote(str);
 
     if (*end == '\0') {
       fprintf(stderr, "cshell: syntax error: unmatched double quote\n");
       return NULL;
     }
 
+    *end = '\0';
     end++;
     if (is_delim(end) || is_symbol(end) || *end == '\0')
       return end;
@@ -128,6 +131,9 @@ static char *parse_arg(char *str, Command *cmd) {
         "cshell: syntax error: missing space delimiter after closing quote\n");
     return NULL;
   }
+
+  cmd->args[cmd->arg_count] = str;
+  cmd->arg_count++;
   return skip_to_end_of_token(str);
 }
 
