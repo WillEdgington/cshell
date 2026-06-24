@@ -49,8 +49,37 @@ static char *skip_to_end_of_token(char *str) {
 
 static char *skip_to_closing_quote(char *str) {
   char *ptr = str;
-  while (*ptr != '\"' && *ptr != '\0')
+
+  int has_escapes = 0;
+  int escaped = 0;
+
+  while ((escaped || *ptr != '\"') && *ptr != '\0') {
+    if (escaped && (*ptr == '\"' || *ptr == '\\'))
+      has_escapes = 1;
+    escaped = !escaped && *ptr == '\\' ? 1 : 0;
     ptr++;
+  }
+
+  if (has_escapes) {
+    escaped = 0;
+    char *orig = str;
+    char *changed = str;
+
+    while (orig < ptr) {
+      if (escaped && (*orig == '\"' || *orig == '\\'))
+        changed--;
+      escaped = !escaped && *orig == '\\' ? 1 : 0;
+
+      *changed = *orig;
+      orig++;
+      changed++;
+    }
+
+    while (changed < ptr) {
+      *changed = '\0';
+      changed++;
+    }
+  }
   return ptr;
 }
 
