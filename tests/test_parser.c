@@ -44,9 +44,9 @@ static void test_args_with_whitespace(Arena *a) {
       "Padding command arg_count should be 3 (grep, -l, \"hello world\")");
   ASSERT_STR_EQ(cmd->args[0], "grep", "args[0] should catch first word (grep)");
   ASSERT_STR_EQ(cmd->args[1], "-i", "args[1] should catch flag (-i)");
-  ASSERT_STR_EQ(
-      cmd->args[2], "\"hello world\"",
-      "args[2] should keep internal strings intact (\"hello world\")");
+  ASSERT_STR_EQ(cmd->args[2], "hello world",
+                "args[2] should keep internal strings intact and strip any "
+                "quotation wrappers");
   ASSERT_PTR_NULL(
       cmd->args[3],
       "args[arg_length] must be NULL-terminated (args with whitespace test)");
@@ -210,6 +210,24 @@ static void test_empty_input(Arena *a) {
                   "Main interface parameter tracking remains unbound");
 }
 
+static void test_escaped_tokens_in_quoted_args(Arena *a) {
+  Pipeline pipe;
+
+  char escaped_q[] = "echo \"\\\"hello\\\", I said\"";
+  pipeline_init(&pipe, a);
+  cshell_parse_line(escaped_q, &pipe);
+  ASSERT_STR_EQ(
+      pipe.head->args[1], "\"hello\", I said",
+      "Escaped quotes in quoted args should be included in parsed arg");
+
+  char escaped_bslash[] = "echo \"C:\\\\User\\\\Windows\\\\\"";
+  pipeline_init(&pipe, a);
+  cshell_parse_line(escaped_bslash, &pipe);
+  ASSERT_STR_EQ(
+      pipe.head->args[1], "C:\\User\\Windows\\",
+      "Escaped back-slash in quoted args should be included in parsed arg");
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
@@ -225,6 +243,7 @@ int main(void) {
   test_standard_pipeline(&a);
   test_syntax_errors(&a);
   test_empty_input(&a);
+  test_escaped_tokens_in_quoted_args(&a);
 
   arena_free(&a);
 
