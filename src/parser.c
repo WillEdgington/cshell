@@ -49,8 +49,37 @@ static char *skip_to_end_of_token(char *str) {
 
 static char *skip_to_closing_quote(char *str) {
   char *ptr = str;
-  while (*ptr != '\"' && *ptr != '\0')
+
+  int has_escapes = 0;
+  int escaped = 0;
+
+  while ((escaped || *ptr != '\"') && *ptr != '\0') {
+    if (escaped && (*ptr == '\"' || *ptr == '\\'))
+      has_escapes = 1;
+    escaped = !escaped && *ptr == '\\' ? 1 : 0;
     ptr++;
+  }
+
+  if (has_escapes) {
+    escaped = 0;
+    char *orig = str;
+    char *changed = str;
+
+    while (orig < ptr) {
+      if (escaped && (*orig == '\"' || *orig == '\\'))
+        changed--;
+      escaped = !escaped && *orig == '\\' ? 1 : 0;
+
+      *changed = *orig;
+      orig++;
+      changed++;
+    }
+
+    while (changed < ptr) {
+      *changed = '\0';
+      changed++;
+    }
+  }
   return ptr;
 }
 
@@ -108,17 +137,20 @@ static char *parse_arg(char *str, Command *cmd) {
     return NULL;
   }
 
-  cmd->args[cmd->arg_count] = str;
-  cmd->arg_count++;
-
   if (*str == '\"') {
-    char *end = skip_to_closing_quote(str + 1);
+    *str = '\0';
+    str++;
+
+    cmd->args[cmd->arg_count] = str;
+    cmd->arg_count++;
+    char *end = skip_to_closing_quote(str);
 
     if (*end == '\0') {
       fprintf(stderr, "cshell: syntax error: unmatched double quote\n");
       return NULL;
     }
 
+    *end = '\0';
     end++;
     if (is_delim(end) || is_symbol(end) || *end == '\0')
       return end;
@@ -128,6 +160,9 @@ static char *parse_arg(char *str, Command *cmd) {
         "cshell: syntax error: missing space delimiter after closing quote\n");
     return NULL;
   }
+
+  cmd->args[cmd->arg_count] = str;
+  cmd->arg_count++;
   return skip_to_end_of_token(str);
 }
 
