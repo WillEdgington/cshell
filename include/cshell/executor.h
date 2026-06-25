@@ -4,7 +4,8 @@
 #include "cshell/parser.h"
 
 #define SHELL_STATUS_EXIT 256
-#define CHILD_EXEC_FAILURE 127
+#define NOT_FOUND_STATUS 127
+#define DENIED_STATUS 126
 
 typedef enum {
   CMD_TYPE_EMPTY,

@@ -9,6 +9,7 @@
 #include "cshell/parser.h"
 #include "cshell/prompt.h"
 #include "cshell/tracker.h"
+#include "cshell/runtime.h"
 
 #define MAX_LINE_LENGTH 4096
 #define PIPELINE_ARENA_SLAB_SIZE 8192 // 8 KB
@@ -36,6 +37,8 @@ int main(void) {
   cshell_init_signals();
   cshell_tracker_init();
 
+  shell_r.last_exit_status = 0;
+
   while (1) {
     arena_reset(&arena);
     pipeline_init(&pipe, &arena);
@@ -47,14 +50,18 @@ int main(void) {
       if (errno != EINTR) {
         handle_exit(SIGTERM, &arena);
       }
+      shell_r.last_exit_status = errno;
       errno = 0;
       continue;
     }
 
-    if (cshell_parse_line(line, &pipe) == -1)
+    if (cshell_parse_line(line, &pipe) == -1) {
+      shell_r.last_exit_status = 1;
       continue;
-
-    if (cshell_execute_pipeline(&pipe) == SHELL_STATUS_EXIT)
+    }
+    
+    shell_r.last_exit_status = cshell_execute_pipeline(&pipe);
+    if (shell_r.last_exit_status == SHELL_STATUS_EXIT)
       handle_exit(SIGTERM, &arena);
   }
   arena_free(&arena);
