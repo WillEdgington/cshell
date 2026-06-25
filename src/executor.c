@@ -60,23 +60,31 @@ void cshell_init_signals(void) {
 static int execute_cd(const Command *cmd) {
   if (cmd->arg_count == 1) {
     fprintf(stderr, "cshell: cd: missing argument\n");
-    return -1;
+    return 1;
   } else if (cmd->arg_count == 2) {
     if (chdir(cmd->args[1]) == -1) {
       perror("cshell: cd");
-      return -1;
+      return errno;
     }
     return 0;
   }
   errno = E2BIG;
   fprintf(stderr, "cshell: cd: too many arguments\n");
-  return -1;
+  return errno;
 }
 
 static void execute_external(const Command *cmd) {
   execvp(cmd->args[0], cmd->args);
-  perror("cshell: external");
-  _exit(CHILD_EXEC_FAILURE);
+  if (errno == ENOENT) {
+    fprintf(stderr, "cshell: %s: command not found\n", cmd->args[0]);
+    _exit(NOT_FOUND_STATUS);
+  } else if (errno == EACCES) {
+    fprintf(stderr, "cshell: %s: Permission denied\n", cmd->args[0]);
+    _exit(DENIED_STATUS);
+  } else {
+    fprintf(stderr, "cshell: %s: %s\n", cmd->args[0], strerror(errno));
+    _exit(1);
+  }
 }
 
 static int execute_external_with_subshell_creation(const Command *cmd) {
@@ -84,7 +92,7 @@ static int execute_external_with_subshell_creation(const Command *cmd) {
 
   if (pid < 0) {
     perror("cshell: fork");
-    return -1;
+    return errno;
   }
 
   if (pid == 0) {
@@ -93,13 +101,13 @@ static int execute_external_with_subshell_creation(const Command *cmd) {
       int in_fd = open(cmd->input_redirect, O_RDONLY);
       if (in_fd == -1) {
         perror("cshell: input redirection");
-        _exit(CHILD_EXEC_FAILURE);
+        _exit(errno);
       }
 
       if (dup2(in_fd, STDIN_FILENO) == -1) {
         perror("cshell: dup2 input");
         close(in_fd);
-        _exit(CHILD_EXEC_FAILURE);
+        _exit(errno);
       }
       close(in_fd);
     }
@@ -109,13 +117,13 @@ static int execute_external_with_subshell_creation(const Command *cmd) {
           open(cmd->output_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
       if (out_fd == -1) {
         perror("cshell: output redirection");
-        _exit(CHILD_EXEC_FAILURE);
+        _exit(errno);
       }
 
       if (dup2(out_fd, STDOUT_FILENO) == -1) {
         perror("cshell: dup2 output");
         close(out_fd);
-        _exit(CHILD_EXEC_FAILURE);
+        _exit(errno);
       }
       close(out_fd);
     }
@@ -126,25 +134,28 @@ static int execute_external_with_subshell_creation(const Command *cmd) {
   int status;
   if (waitpid(pid, &status, 0) == -1) {
     perror("cshell: waitpid");
-    return -1;
+    return 1;
   }
 
-  if (WIFEXITED(status))
+  if (WIFEXITED(status)) {
     return WEXITSTATUS(status);
-  return -1;
+  } else if (WIFSIGNALED(status)) {
+    return 128 + WTERMSIG(status);
+  }
+  return 1;
 }
 
 static int execute_export(const Command *cmd) {
   if (cmd->arg_count < 2) {
     fprintf(stderr, "cshell: export: missing assignment statement\n");
-    return -1;
+    return 1;
   }
 
   char *assignment = cmd->args[1];
   char *delim = strchr(assignment, '=');
   if (delim == NULL) {
     fprintf(stderr, "cshell: export: invalid syntax, expected NAME=VALUE\n");
-    return -1;
+    return 1;
   }
 
   *delim = '\0';
@@ -153,7 +164,7 @@ static int execute_export(const Command *cmd) {
 
   if (setenv(key, value, 1) == -1) {
     perror("cshell: export");
-    return -1;
+    return errno;
   }
   return 0;
 }
@@ -163,7 +174,7 @@ static void setup_child_io(const Command *cmd, int prev_read_fd,
   if (prev_read_fd != STDIN_FILENO) {
     if (dup2(prev_read_fd, STDIN_FILENO) == -1) {
       perror("cshell: child input pipe linking failed");
-      _exit(CHILD_EXEC_FAILURE);
+      _exit(errno);
     }
     close(prev_read_fd);
   }
@@ -172,7 +183,7 @@ static void setup_child_io(const Command *cmd, int prev_read_fd,
     close(tunnel[0]);
     if (dup2(tunnel[1], STDOUT_FILENO) == -1) {
       perror("cshell: child output pipe linking failed");
-      _exit(CHILD_EXEC_FAILURE);
+      _exit(errno);
     }
     close(tunnel[1]);
   }
@@ -181,13 +192,13 @@ static void setup_child_io(const Command *cmd, int prev_read_fd,
     int in_fd = open(cmd->input_redirect, O_RDONLY);
     if (in_fd == -1) {
       perror("cshell: input redirection");
-      _exit(CHILD_EXEC_FAILURE);
+      _exit(errno);
     }
 
     if (dup2(in_fd, STDIN_FILENO) == -1) {
       perror("cshell: dup2 input");
       close(in_fd);
-      _exit(CHILD_EXEC_FAILURE);
+      _exit(errno);
     }
     close(in_fd);
   }
@@ -196,13 +207,13 @@ static void setup_child_io(const Command *cmd, int prev_read_fd,
     int out_fd = open(cmd->output_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (out_fd == -1) {
       perror("cshell: output redirection");
-      _exit(CHILD_EXEC_FAILURE);
+      _exit(errno);
     }
 
     if (dup2(out_fd, STDOUT_FILENO) == -1) {
       perror("cshell: dup2 output");
       close(out_fd);
-      _exit(CHILD_EXEC_FAILURE);
+      _exit(errno);
     }
     close(out_fd);
   }
@@ -214,14 +225,14 @@ static void execute_child_dispatch(const Command *cmd) {
   case CMD_TYPE_EMPTY:
     _exit(0);
   case CMD_TYPE_CD:
-    _exit(execute_cd(cmd) == 0 ? 0 : CHILD_EXEC_FAILURE);
+    _exit(execute_cd(cmd));
   case CMD_TYPE_EXTERNAL:
     execute_external(cmd);
     break;
   case CMD_TYPE_EXPORT:
-    _exit(execute_export(cmd) == 0 ? 0 : CHILD_EXEC_FAILURE);
+    _exit(execute_export(cmd));
   default:
-    _exit(CHILD_EXEC_FAILURE);
+    _exit(1);
   }
 }
 
@@ -270,12 +281,16 @@ static void cleanup_fork_failure(pid_t *pids, int prev_read_fd, int tunnel[2],
 
 static int reap_pipeline(pid_t *pids, pid_t last_pid, int command_count) {
   int status;
-  int terminal_exit_status = -1;
+  int terminal_exit_status = 1;
 
   for (int i = 0; i < command_count; i++) {
     pid_t reaped_pid = waitpid(pids[i], &status, 0);
     if (reaped_pid == last_pid) {
-      terminal_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+      if (WIFEXITED(status)) {
+        terminal_exit_status = WEXITSTATUS(status);
+      } else if (WIFSIGNALED(status)) {
+        terminal_exit_status = 128 + WTERMSIG(status);
+      }
     }
   }
   return terminal_exit_status;
