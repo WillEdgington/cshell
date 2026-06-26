@@ -172,14 +172,43 @@ static char *parse_arg(char *str, Command *cmd) {
   return skip_to_end_of_token(str);
 }
 
+char *parse_logical_op(char *str, Pipeline *pipe, LogicalOp next_op) {
+  if (command_cap(pipe->tail) == -1) {
+    fprintf(stderr, 
+      "cshell: syntax error: empty operation before '%s'\n", 
+      next_op == LOGICAL_OP_AND ? "&&" : "||"
+    );
+    return NULL;
+  }
+  
+  Pipeline *new_p = (Pipeline *)arena_alloc(pipe->arena, sizeof(Pipeline));
+  if (new_p == NULL) {
+    fprintf(stderr, "cshell: memory allocation failure inside arena\n");
+    return NULL;
+  }
+
+  pipe->next = new_p;
+  pipe->next_op = next_op;
+  pipeline_init(new_p, pipe->arena);
+  
+  for (int i = 0; i < 2; i++)
+    *(str + i) = '\0';
+
+  return str + 2;
+}
+
 static char *parse_token(char *str, Pipeline *pipe) {
   switch (*str) {
   case '>':
   case '<':
     return parse_redirect(str, pipe->tail);
   case '&':
+    if (*(str + 1) == '&')
+      return parse_logical_op(str, pipe, LOGICAL_OP_AND);
     return parse_is_background(str, pipe);
   case '|':
+    if (*(str + 1) == '|')
+      return parse_logical_op(str, pipe, LOGICAL_OP_OR);
     return parse_new_cmd(str, pipe);
   case '#':
     return parse_comment(str);
@@ -192,6 +221,8 @@ void pipeline_init(Pipeline *pipe, Arena *a) {
   pipe->arena = a;
   pipe->head = (Command *)arena_alloc(a, sizeof(Command));
   pipe->tail = pipe->head;
+  pipe->next = NULL;
+  pipe->next_op = LOGICAL_OP_NONE;
   pipe->is_background = 0;
   pipe->command_count = 1;
   command_init(pipe->head);
@@ -206,20 +237,26 @@ int cshell_parse_line(char *line, Pipeline *pipe) {
     return 0;
   }
 
+  Pipeline *cur_p = pipe;
+
   while (*ptr != '\0') {
     if (pipe->is_background == 1) {
       fprintf(stderr, "cshell: syntax error: non-trailing '&'\n");
       return -1;
     }
 
-    ptr = parse_token(ptr, pipe);
+    ptr = parse_token(ptr, cur_p);
     if (ptr == NULL) {
       return -1;
     }
+
     ptr = skip_delimeters(ptr);
+
+    if (cur_p->next != NULL)
+      cur_p = cur_p->next;
   }
 
-  if (command_cap(pipe->tail) == -1) {
+  if (command_cap(cur_p->tail) == -1) {
     fprintf(stderr,
             "cshell: syntax error: dangling pipeline modifier sequence\n");
     return -1;

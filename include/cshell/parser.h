@@ -5,6 +5,12 @@
 
 #include "clib/arena.h"
 
+typedef enum {
+  LOGICAL_OP_NONE,
+  LOGICAL_OP_AND,
+  LOGICAL_OP_OR
+} LogicalOp;
+
 typedef struct Command {
   char *input_redirect;
   char *output_redirect;
@@ -13,10 +19,12 @@ typedef struct Command {
   int arg_count;
 } Command;
 
-typedef struct {
+typedef struct Pipeline {
   Command *head;
   Command *tail;
   Arena *arena;
+  struct Pipeline *next;
+  LogicalOp next_op;
   int is_background;
   int command_count;
 } Pipeline;
