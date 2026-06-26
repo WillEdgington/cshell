@@ -228,6 +228,35 @@ static void test_escaped_tokens_in_quoted_args(Arena *a) {
       "Escaped back-slash in quoted args should be included in parsed arg");
 }
 
+static void test_input_with_comment(Arena *a) {
+  Pipeline pipe;
+
+  char spaced_comment[] = "echo hello # this is a comment";
+  pipeline_init(&pipe, a);
+  cshell_parse_line(spaced_comment, &pipe);
+  ASSERT_INT_EQ(2, pipe.head->arg_count, "Parser should only parse uncommented args");
+  ASSERT((
+    strcmp("echo", pipe.head->args[0]) == 0 &&
+    strcmp("hello", pipe.head->args[1]) == 0 &&
+    pipe.head->args[2] == NULL
+  ),
+    "Parser should assign correct args for input with comments"
+  );
+
+  char messy_comment[] = "echo hello #use the # to make a comment##\nworld ##comment\r";
+  pipeline_init(&pipe, a);
+  cshell_parse_line(messy_comment, &pipe);
+  ASSERT_INT_EQ(3, pipe.head->arg_count, "Parser should only parse uncommented args for multi-line commands");
+  ASSERT((
+    strcmp("echo", pipe.head->args[0]) == 0 &&
+    strcmp("hello", pipe.head->args[1]) == 0 &&
+    strcmp("world", pipe.head->args[2]) == 0 &&
+    pipe.head->args[3] == NULL
+  ),
+    "Parser should assign correct args for multi-line input with comments"
+  );
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
@@ -244,6 +273,7 @@ int main(void) {
   test_syntax_errors(&a);
   test_empty_input(&a);
   test_escaped_tokens_in_quoted_args(&a);
+  test_input_with_comment(&a);
 
   arena_free(&a);
 
