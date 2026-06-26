@@ -4,6 +4,7 @@
 #include "cshell/expansion.h"
 #include "cshell/parser.h"
 #include "cshell/test_framework.h"
+#include "cshell/runtime.h"
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -44,6 +45,20 @@ static void test_missing_expansion(Arena *a) {
         "Unset environment variable expansion must replace arg with empty string ('\\0')");
 }
 
+static void test_last_exit_status_expansion(Arena *a) {
+  shell_r.last_exit_status = 0;
+
+  Pipeline pipe;
+  pipeline_init(&pipe, a);
+  pipe.head = &(Command){
+      .args = {"echo", "$?", NULL}, .arg_count = 2, .next = NULL};
+  pipe.command_count = 1;
+
+  cshell_expand_pipeline(&pipe);
+
+  ASSERT_STR_EQ(pipe.head->args[1], "0", "expansion of '$?' should resolve the last exit status");
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
@@ -52,6 +67,7 @@ int main(void) {
 
   test_successful_expansion(&a);
   test_missing_expansion(&a);
+  test_last_exit_status_expansion(&a);
 
   arena_free(&a);
 
