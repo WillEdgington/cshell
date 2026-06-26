@@ -131,6 +131,12 @@ static char *parse_new_cmd(char *str, Pipeline *pipe) {
   return str;
 }
 
+static char *parse_comment(char *str) {
+  while (*str != '\0' && *str != '\n')
+    str++;
+  return str;
+}
+
 static char *parse_arg(char *str, Command *cmd) {
   if (cmd->arg_count == MAX_ARGS) {
     fprintf(stderr, "cshell: maximum argument limit exceeded (%d)\n", MAX_ARGS);
@@ -175,6 +181,8 @@ static char *parse_token(char *str, Pipeline *pipe) {
     return parse_is_background(str, pipe);
   case '|':
     return parse_new_cmd(str, pipe);
+  case '#':
+    return parse_comment(str);
   default:
     return parse_arg(str, pipe->tail);
   }
