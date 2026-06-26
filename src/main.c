@@ -10,6 +10,7 @@
 #include "cshell/prompt.h"
 #include "cshell/tracker.h"
 #include "cshell/runtime.h"
+#include "cshell/handler.h"
 
 #define MAX_LINE_LENGTH 4096
 #define PIPELINE_ARENA_SLAB_SIZE 8192 // 8 KB
@@ -60,7 +61,7 @@ int main(void) {
       continue;
     }
     
-    shell_r.last_exit_status = cshell_execute_pipeline(&pipe);
+    cshell_handle_execution(&pipe);
     if (shell_r.last_exit_status == SHELL_STATUS_EXIT)
       handle_exit(SIGTERM, &arena);
   }
