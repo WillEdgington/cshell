@@ -29,8 +29,8 @@ static void test_successful_expansion(Arena *a) {
   unsetenv(test_key);
 }
 
-static void test_missing_expansion_failure(Arena *a) {
-  char *invalid_exp = "$NON_EXISTENT_VAR_29548301";
+static void test_missing_expansion(Arena *a) {
+  char invalid_exp[] = "$NON_EXISTENT_VAR_29548301";
 
   Pipeline pipe;
   pipeline_init(&pipe, a);
@@ -38,22 +38,10 @@ static void test_missing_expansion_failure(Arena *a) {
       .args = {"echo", invalid_exp, NULL}, .arg_count = 2, .next = NULL};
   pipe.command_count = 1;
 
-  int saved_stderr = dup(STDERR_FILENO);
-  int dev_null = open("/dev/null", O_WRONLY);
-  if (dev_null >= 0) {
-    dup2(dev_null, STDERR_FILENO);
-    close(dev_null);
-  }
+  cshell_expand_pipeline(&pipe);
 
-  int status = cshell_expand_pipeline(&pipe);
-
-  if (saved_stderr >= 0) {
-    dup2(saved_stderr, STDERR_FILENO);
-    close(saved_stderr);
-  }
-
-  ASSERT_INT_EQ(status, -1,
-                "Unset environment variable expansion must fail and return -1");
+  ASSERT(*pipe.head->args[1] == '\0',
+        "Unset environment variable expansion must replace arg with empty string ('\\0')");
 }
 
 int main(void) {
@@ -63,7 +51,7 @@ int main(void) {
   arena_init(&a, 4096);
 
   test_successful_expansion(&a);
-  test_missing_expansion_failure(&a);
+  test_missing_expansion(&a);
 
   arena_free(&a);
 
