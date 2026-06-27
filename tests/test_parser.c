@@ -163,36 +163,47 @@ static void test_syntax_errors(Arena *a) {
   }
 
   char err_line1[] = "ls -la >";
-
-  ASSERT_INT_EQ(
-      cshell_parse_line(err_line1, &pipe), -1,
-      "Trailing redirection character without file must return error (-1)");
+  pipeline_init(&pipe, a);
+  int err_status1 = cshell_parse_line(err_line1, &pipe);
 
   char err_line2[] = "sort < &";
   pipeline_init(&pipe, a);
-  ASSERT_INT_EQ(cshell_parse_line(err_line2, &pipe), -1,
-                "Operator collision without valid target filename must return "
-                "error (-1)");
+  int err_status2 = cshell_parse_line(err_line2, &pipe);
 
   char err_line3[] = "| grep root";
   pipeline_init(&pipe, a);
-  ASSERT_INT_EQ(cshell_parse_line(err_line3, &pipe), -1,
-                "Leading pipe marker with missing upstream process must error");
+  int err_status3 = cshell_parse_line(err_line3, &pipe);
 
   char err_line4[] = "cat history.log |";
   pipeline_init(&pipe, a);
-  ASSERT_INT_EQ(cshell_parse_line(err_line4, &pipe), -1,
-                "Dangling pipe execution statement must error");
+  int err_status4 = cshell_parse_line(err_line4, &pipe);
 
   char err_line5[] = "echo & hello";
   pipeline_init(&pipe, a);
-  ASSERT_INT_EQ(cshell_parse_line(err_line5, &pipe), -1,
-                "non-trailing '&' in line must error");
+  int err_status5 = cshell_parse_line(err_line5, &pipe);
 
   if (saved_stderr >= 0) {
     dup2(saved_stderr, STDERR_FILENO);
     close(saved_stderr);
   }
+
+  ASSERT_INT_EQ(
+      err_status1, -1,
+      "Trailing redirection character without file must return error (-1)");
+
+  ASSERT_INT_EQ(
+    err_status2, -1,
+    "Operator collision without valid target filename must return "
+    "error (-1)");
+
+  ASSERT_INT_EQ(err_status3, -1,
+                "Leading pipe marker with missing upstream process must error");
+
+  ASSERT_INT_EQ(err_status4, -1,
+                "Dangling pipe execution statement must error");
+
+  ASSERT_INT_EQ(err_status5, -1,
+                "non-trailing '&' in line must error");
 }
 
 static void test_empty_input(Arena *a) {
@@ -234,7 +245,7 @@ static void test_input_with_comment(Arena *a) {
   char spaced_comment[] = "echo hello # this is a comment";
   pipeline_init(&pipe, a);
   cshell_parse_line(spaced_comment, &pipe);
-  ASSERT_INT_EQ(2, pipe.head->arg_count, "Parser should only parse uncommented args");
+  ASSERT_INT_EQ(pipe.head->arg_count, 2, "Parser should only parse uncommented args");
   ASSERT((
     strcmp("echo", pipe.head->args[0]) == 0 &&
     strcmp("hello", pipe.head->args[1]) == 0 &&
@@ -246,7 +257,7 @@ static void test_input_with_comment(Arena *a) {
   char messy_comment[] = "echo hello #use the # to make a comment##\nworld ##comment\r";
   pipeline_init(&pipe, a);
   cshell_parse_line(messy_comment, &pipe);
-  ASSERT_INT_EQ(3, pipe.head->arg_count, "Parser should only parse uncommented args for multi-line commands");
+  ASSERT_INT_EQ(pipe.head->arg_count, 3, "Parser should only parse uncommented args for multi-line commands");
   ASSERT((
     strcmp("echo", pipe.head->args[0]) == 0 &&
     strcmp("hello", pipe.head->args[1]) == 0 &&
@@ -255,6 +266,62 @@ static void test_input_with_comment(Arena *a) {
   ),
     "Parser should assign correct args for multi-line input with comments"
   );
+}
+
+static void test_input_with_logical_ops(Arena *a) {
+  Pipeline pipe;
+
+  char input_or[] = "cat text.txt || echo backup info";
+  pipeline_init(&pipe, a);
+  ASSERT_INT_EQ(cshell_parse_line(input_or, &pipe), 0, "Command status including logical operator should not error");
+  ASSERT(
+    pipe.next != NULL &&
+    pipe.next_op == LOGICAL_OP_OR,
+    "Logical OR ('||') should correctly create new connected pipeline and store LogicalOp correctly"
+  );
+  ASSERT((
+    strcmp(pipe.tail->args[1], "text.txt") == 0 &&
+    strcmp(pipe.next->head->args[0], "echo") == 0 &&
+    pipe.head->next == NULL &&
+    pipe.head->arg_count == 2 &&
+    pipe.next->head->next == NULL &&
+    pipe.next->head->arg_count == 3
+  ),
+    "Commands either side of a logical operator should correctly split into their pipeline"
+  );
+
+  char input_and[] = "cat text.txt && echo see this on success";
+  pipeline_init(&pipe, a);
+  cshell_parse_line(input_and, &pipe);
+  ASSERT(
+    pipe.next != NULL &&
+    pipe.next_op == LOGICAL_OP_AND,
+    "Logical OR ('&&') should correctly create new connected pipeline and store LogicalOp correctly"
+  );
+
+  int saved_stderr = dup(STDERR_FILENO);
+  int dev_null = open("/dev/null", O_WRONLY);
+
+  if (dev_null >= 0) {
+    dup2(dev_null, STDERR_FILENO);
+    close(dev_null);
+  }
+
+  char dangling_op[] = "cat text.txt &&";
+  pipeline_init(&pipe, a);
+  int dangling_status = cshell_parse_line(dangling_op, &pipe);
+
+  char consecutive_op[] = "cat text.txt && || echo terrible input";
+  pipeline_init(&pipe, a);
+  int consecutive_status = cshell_parse_line(consecutive_op, &pipe);
+
+  if (saved_stderr >= 0) {
+    dup2(saved_stderr, STDERR_FILENO);
+    close(saved_stderr);
+  }
+
+  ASSERT_INT_EQ(dangling_status, -1, "Command status including dangling operator should error");
+  ASSERT_INT_EQ(consecutive_status, -1, "Command status including consecutive operators should error");
 }
 
 int main(void) {
@@ -274,6 +341,7 @@ int main(void) {
   test_empty_input(&a);
   test_escaped_tokens_in_quoted_args(&a);
   test_input_with_comment(&a);
+  test_input_with_logical_ops(&a);
 
   arena_free(&a);
 
