@@ -18,6 +18,105 @@ static void redraw_line(const char *line) {
   write(STDOUT_FILENO, line, strlen(line));
 }
 
+static void input_state_esc_seen(InputState *state, char *c) {
+  *state = *c == '[' ? STATE_BRACKET_SEEN : STATE_NORMAL;
+}
+
+static void
+input_state_bracket_seen(InputState *state, char *c, char *buffer,
+                         char saved_active_line[HISTORY_MAX_LINE_LEN],
+                         int *view_index, size_t *len, size_t max_len) {
+  *state = STATE_NORMAL;
+
+  switch (*c) {
+  // Up arrow
+  case 'A': {
+    int history_size = cshell_history_get_size();
+    if (history_size > 0 && *view_index < history_size - 1) {
+      if (*view_index == -1) {
+        // Save the active line before moving through history
+        strncpy(saved_active_line, buffer, HISTORY_MAX_LINE_LEN - 1);
+        saved_active_line[HISTORY_MAX_LINE_LEN - 1] = '\0';
+      }
+
+      (*view_index)++;
+      const char *hist_entry = cshell_history_get(*view_index);
+      if (hist_entry != NULL) {
+        strncpy(buffer, hist_entry, max_len - 1);
+        buffer[max_len - 1] = '\0';
+        *len = strlen(buffer);
+        redraw_line(buffer);
+      }
+    }
+    break;
+  }
+  // Down arrow
+  case 'B':
+    if (*view_index > 0) {
+      (*view_index)--;
+      const char *hist_entry = cshell_history_get(*view_index);
+      if (hist_entry != NULL) {
+        strncpy(buffer, hist_entry, max_len - 1);
+        buffer[max_len - 1] = '\0';
+        *len = strlen(buffer);
+        redraw_line(buffer);
+      }
+    } else if (*view_index == 0) {
+      // Back to active line
+      strncpy(buffer, saved_active_line, max_len - 1);
+      buffer[max_len - 1] = '\0';
+      *len = strlen(buffer);
+      redraw_line(buffer);
+    }
+    break;
+  default:
+    break;
+  }
+}
+
+static int input_state_normal(InputState *state, char *c, char *buffer,
+                              size_t *len, size_t max_len) {
+  switch (*c) {
+  // Escape
+  case '\033':
+    *state = STATE_ESC_SEEN;
+    return 0;
+  // User pressed enter
+  case '\n':
+  case '\r':
+    write(STDOUT_FILENO, "\n", 1);
+    buffer[*len] = '\0';
+    return 1; // complete
+  // Backspace
+  case 0x7F:
+  case 0x08:
+    if (*len > 0) {
+      (*len)--;
+      buffer[*len] = '\0';
+      // move cursor left ('\b'), overwrite with space (' '), move left again
+      // ('\b')
+      write(STDOUT_FILENO, "\b \b", 3);
+    }
+    return 0;
+  // CTRL+D (EOF Handled only on empty prompt line)
+  case 0x04:
+    if (*len == 0)
+      return -1;
+    return 0;
+  // Standard visible ASCII characters
+  default:
+    if (*c >= 32 && *c <= 126) {
+      if (*len < max_len - 1) {
+        buffer[*len] = *c;
+        (*len)++;
+        buffer[*len] = '\0';
+        write(STDOUT_FILENO, c, 1);
+      }
+    }
+    return 0;
+  }
+}
+
 ssize_t cshell_read_line(char *buffer, size_t max_len) {
   if (buffer == NULL || max_len == 0)
     return -1;
@@ -37,94 +136,20 @@ ssize_t cshell_read_line(char *buffer, size_t max_len) {
       return -1;
 
     // State machine logic
-    if (state == STATE_ESC_SEEN) {
-      state = c == '[' ? STATE_BRACKET_SEEN : STATE_NORMAL;
+    switch (state) {
+    case STATE_ESC_SEEN:
+      input_state_esc_seen(&state, &c);
+      continue;
+    case STATE_BRACKET_SEEN:
+      input_state_bracket_seen(&state, &c, buffer, saved_active_line,
+                               &view_index, &len, max_len);
+      continue;
+    default: {
+      int status = input_state_normal(&state, &c, buffer, &len, max_len);
+      if (status != 0)
+        return status == -1 ? -1 : (ssize_t)len;
       continue;
     }
-
-    if (state == STATE_BRACKET_SEEN) {
-      state = STATE_NORMAL;
-
-      // Up arrow
-      if (c == 'A') {
-        int history_size = cshell_history_get_size();
-        if (history_size > 0 && view_index < history_size - 1) {
-          if (view_index == -1) {
-            // Save the active line before moving through history
-            strncpy(saved_active_line, buffer, HISTORY_MAX_LINE_LEN - 1);
-            saved_active_line[HISTORY_MAX_LINE_LEN - 1] = '\0';
-          }
-
-          view_index++;
-          const char *hist_entry = cshell_history_get(view_index);
-          if (hist_entry != NULL) {
-            strncpy(buffer, hist_entry, max_len - 1);
-            buffer[max_len - 1] = '\0';
-            len = strlen(buffer);
-            redraw_line(buffer);
-          }
-        }
-      } else if (c == 'B') { // Down arrow
-        if (view_index > 0) {
-          view_index--;
-          const char *hist_entry = cshell_history_get(view_index);
-          if (hist_entry != NULL) {
-            strncpy(buffer, hist_entry, max_len - 1);
-            buffer[max_len - 1] = '\0';
-            len = strlen(buffer);
-            redraw_line(buffer);
-          }
-        } else if (view_index == 0) {
-          // Back to active line
-          strncpy(buffer, saved_active_line, max_len - 1);
-          buffer[max_len - 1] = '\0';
-          len = strlen(buffer);
-          redraw_line(buffer);
-        }
-      }
-      continue;
-    }
-
-    // Escape
-    if (c == '\033') {
-      state = STATE_ESC_SEEN;
-      continue;
-    }
-
-    // User pressed enter
-    if (c == '\n' || c == '\r') {
-      write(STDOUT_FILENO, "\n", 1);
-      buffer[len] = '\0';
-      return (ssize_t)len;
-    }
-
-    // Backspace
-    if (c == 0x7F || c == 0x08) {
-      if (len > 0) {
-        len--;
-        buffer[len] = '\0';
-        // move cursor left ('\b'), overwrite with space (' '), move left again
-        // ('\b')
-        write(STDOUT_FILENO, "\b \b", 3);
-      }
-      continue;
-    }
-
-    // CTRL+D (EOF Handled only on empty prompt line)
-    if (c == 0x04) {
-      if (len == 0)
-        return -1;
-      continue;
-    }
-
-    // Standard visible ASCII characters
-    if (c >= 32 && c <= 126) {
-      if (len < max_len - 1) {
-        buffer[len] = c;
-        len++;
-        buffer[len] = '\0';
-        write(STDOUT_FILENO, &c, 1);
-      }
     }
   }
 }
