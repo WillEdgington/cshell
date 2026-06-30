@@ -63,6 +63,7 @@ input_state_bracket_seen(InputState *state, char *c, char *buffer,
       }
     } else if (*view_index == 0) {
       // Back to active line
+      (*view_index)--;
       strncpy(buffer, saved_active_line, max_len - 1);
       buffer[max_len - 1] = '\0';
       *len = strlen(buffer);
