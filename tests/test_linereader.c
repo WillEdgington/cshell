@@ -43,7 +43,9 @@ static void test_linereader_basic(void) {
   const char *input = "echo engineering\n";
   feed_mock_input(input, strlen(input));
 
+  int saved_stdout = mute_output();
   ssize_t ret = cshell_read_line(buf, sizeof(buf));
+  unmute_output(saved_stdout);
 
   ASSERT_INT_EQ((int)ret, (int)strlen(input) - 1,
                 "Should return exact string size excluding newline");
