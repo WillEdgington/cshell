@@ -95,12 +95,61 @@ static void test_linereader_history_navigation(void) {
                 "Up-Up-Down sequence must traverse linear states correctly");
 }
 
+static void test_linereader_horizontal_cursor_navigation(void) {
+  char buf[HISTORY_MAX_LINE_LEN];
+  int saved_stdout;
+  ssize_t ret;
+
+  // Equivalent to: Type "abc", Left, Left, Type 'X', Enter -> "aXbc"
+  const char input_insert[] = "abc\033[D\033[Dx\n";
+  feed_mock_input(input_insert, strlen(input_insert));
+
+  saved_stdout = mute_output();
+  ret = cshell_read_line(buf, sizeof(buf));
+  unmute_output(saved_stdout);
+
+  ASSERT_INT_EQ((int)ret, 4, "Length should increase after mid-line insertion");
+  ASSERT_STR_EQ(
+      buf, "axbc",
+      "Buffer must shift characters rightward to allow mid-line insertion");
+
+  // Equivalent to: Type "abc", Left, Backspace, Enter -> "ac"
+  const char input_delete[] = {'a', 'b',  'c',  '\033', '[',
+                               'D', 0x7F, '\n', '\0'};
+  feed_mock_input(input_delete, strlen(input_delete));
+
+  saved_stdout = mute_output();
+  ret = cshell_read_line(buf, sizeof(buf));
+  unmute_output(saved_stdout);
+
+  ASSERT_INT_EQ((int)ret, 2, "Length should decrease after mid-line deletion");
+  ASSERT_STR_EQ(buf, "ac",
+                "Buffer must shift characters leftward to bridge a mid-line "
+                "deletion gap");
+
+  // Equivalent to: Left (at start), Right (at start), Type "xyz", Right, Right,
+  // Enter -> "xyz"
+  const char input_boundary[] = "\033[D\033[Cxyz\033[C\033[C\n";
+  feed_mock_input(input_boundary, strlen(input_boundary));
+
+  saved_stdout = mute_output();
+  ret = cshell_read_line(buf, sizeof(buf));
+  unmute_output(saved_stdout);
+
+  ASSERT_INT_EQ(
+      (int)ret, 3,
+      "Length should remain unaffected by out-of-bound arrow sequences");
+  ASSERT_STR_EQ(buf, "xyz",
+                "Clamping limits must prevent cursor underflows or overflows");
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
   test_linereader_basic();
   test_linereader_backspace();
   test_linereader_history_navigation();
+  test_linereader_horizontal_cursor_navigation();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;

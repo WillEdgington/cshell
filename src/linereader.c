@@ -7,6 +7,15 @@
 
 typedef enum { STATE_NORMAL, STATE_ESC_SEEN, STATE_BRACKET_SEEN } InputState;
 
+static void move_cursor(size_t cursor_pos, size_t len) {
+  if (cursor_pos < len) {
+    size_t delta = len - cursor_pos;
+    for (size_t i = 0; i < delta; i++) {
+      write(STDOUT_FILENO, "\033[D", 3);
+    }
+  }
+}
+
 static void redraw_line(const char *line) {
   // \r: Move the cursor back to the exact start of the line (column 0)
   // \033[K: ANSI escape code to erase everything from the cursor to end of the
@@ -25,7 +34,8 @@ static void input_state_esc_seen(InputState *state, char *c) {
 static void
 input_state_bracket_seen(InputState *state, char *c, char *buffer,
                          char saved_active_line[HISTORY_MAX_LINE_LEN],
-                         int *view_index, size_t *len, size_t max_len) {
+                         int *view_index, size_t *len, size_t *cursor_pos,
+                         size_t max_len) {
   *state = STATE_NORMAL;
 
   switch (*c) {
@@ -45,6 +55,7 @@ input_state_bracket_seen(InputState *state, char *c, char *buffer,
         strncpy(buffer, hist_entry, max_len - 1);
         buffer[max_len - 1] = '\0';
         *len = strlen(buffer);
+        *cursor_pos = *len;
         redraw_line(buffer);
       }
     }
@@ -59,6 +70,7 @@ input_state_bracket_seen(InputState *state, char *c, char *buffer,
         strncpy(buffer, hist_entry, max_len - 1);
         buffer[max_len - 1] = '\0';
         *len = strlen(buffer);
+        *cursor_pos = *len;
         redraw_line(buffer);
       }
     } else if (*view_index == 0) {
@@ -67,7 +79,22 @@ input_state_bracket_seen(InputState *state, char *c, char *buffer,
       strncpy(buffer, saved_active_line, max_len - 1);
       buffer[max_len - 1] = '\0';
       *len = strlen(buffer);
+      *cursor_pos = *len;
       redraw_line(buffer);
+    }
+    break;
+  // Right arrow
+  case 'C':
+    if (*cursor_pos < *len) {
+      (*cursor_pos)++;
+      write(STDOUT_FILENO, "\033[C", 3);
+    }
+    break;
+  // Left arrow
+  case 'D':
+    if (*cursor_pos > 0) {
+      (*cursor_pos)--;
+      write(STDOUT_FILENO, "\033[D", 3);
     }
     break;
   default:
@@ -75,8 +102,59 @@ input_state_bracket_seen(InputState *state, char *c, char *buffer,
   }
 }
 
+static int handle_enter(char *buffer, size_t *len, size_t *cursor_pos) {
+  if (*cursor_pos < *len) {
+    // Move cursor to end of string line
+    size_t delta = *len - *cursor_pos;
+    for (size_t i = 0; i < delta; i++) {
+      write(STDOUT_FILENO, "\033[C", 3);
+    }
+    *cursor_pos = *len;
+  }
+
+  write(STDOUT_FILENO, "\n", 1);
+  buffer[*len] = '\0';
+  return 1;
+}
+
+static void handle_backspace(char *buffer, size_t *len, size_t *cursor_pos) {
+  if (*len == 0 || *cursor_pos == 0)
+    return;
+  (*len)--;
+  size_t cur_pos = *cursor_pos - 1;
+  while (cur_pos < *len) {
+    buffer[cur_pos] = buffer[cur_pos + 1];
+    cur_pos++;
+  }
+
+  buffer[*len] = '\0';
+  (*cursor_pos)--;
+
+  redraw_line(buffer);
+  move_cursor(*cursor_pos, *len);
+}
+
+static void handle_character_insertion(char *c, char *buffer, size_t *len,
+                                       size_t *cursor_pos) {
+  (*len)++;
+  if (*cursor_pos + 1 < *len) {
+    size_t cur_pos = *len;
+    while (cur_pos > *cursor_pos) {
+      buffer[cur_pos] = buffer[cur_pos - 1];
+      cur_pos--;
+    }
+  }
+
+  buffer[*cursor_pos] = *c;
+  buffer[*len] = '\0';
+  (*cursor_pos)++;
+
+  redraw_line(buffer);
+  move_cursor(*cursor_pos, *len);
+}
+
 static int input_state_normal(InputState *state, char *c, char *buffer,
-                              size_t *len, size_t max_len) {
+                              size_t *len, size_t *cursor_pos, size_t max_len) {
   switch (*c) {
   // Escape
   case '\033':
@@ -85,19 +163,11 @@ static int input_state_normal(InputState *state, char *c, char *buffer,
   // User pressed enter
   case '\n':
   case '\r':
-    write(STDOUT_FILENO, "\n", 1);
-    buffer[*len] = '\0';
-    return 1; // complete
+    return handle_enter(buffer, len, cursor_pos);
   // Backspace
   case 0x7F:
   case 0x08:
-    if (*len > 0) {
-      (*len)--;
-      buffer[*len] = '\0';
-      // move cursor left ('\b'), overwrite with space (' '), move left again
-      // ('\b')
-      write(STDOUT_FILENO, "\b \b", 3);
-    }
+    handle_backspace(buffer, len, cursor_pos);
     return 0;
   // CTRL+D (EOF Handled only on empty prompt line)
   case 0x04:
@@ -106,14 +176,8 @@ static int input_state_normal(InputState *state, char *c, char *buffer,
     return 0;
   // Standard visible ASCII characters
   default:
-    if (*c >= 32 && *c <= 126) {
-      if (*len < max_len - 1) {
-        buffer[*len] = *c;
-        (*len)++;
-        buffer[*len] = '\0';
-        write(STDOUT_FILENO, c, 1);
-      }
-    }
+    if (*c >= 32 && *c <= 126 && *len < max_len - 1)
+      handle_character_insertion(c, buffer, len, cursor_pos);
     return 0;
   }
 }
@@ -122,6 +186,7 @@ ssize_t cshell_read_line(char *buffer, size_t max_len) {
   if (buffer == NULL || max_len == 0)
     return -1;
 
+  size_t cursor_pos = 0;
   size_t len = 0;
   buffer[0] = '\0';
 
@@ -143,10 +208,11 @@ ssize_t cshell_read_line(char *buffer, size_t max_len) {
       continue;
     case STATE_BRACKET_SEEN:
       input_state_bracket_seen(&state, &c, buffer, saved_active_line,
-                               &view_index, &len, max_len);
+                               &view_index, &len, &cursor_pos, max_len);
       continue;
     default: {
-      int status = input_state_normal(&state, &c, buffer, &len, max_len);
+      int status =
+          input_state_normal(&state, &c, buffer, &len, &cursor_pos, max_len);
       if (status != 0)
         return status == -1 ? -1 : (ssize_t)len;
       continue;
