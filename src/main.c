@@ -15,7 +15,6 @@
 #include "cshell/terminal.h"
 #include "cshell/tracker.h"
 
-#define MAX_LINE_LENGTH 4096
 #define PIPELINE_ARENA_SLAB_SIZE 8192 // 8 KB
 
 static void handle_shutdown(int sig) {
@@ -33,7 +32,7 @@ int main(void) {
   signal(SIGINT, SIG_IGN);
   signal(SIGTERM, handle_shutdown);
 
-  char line[MAX_LINE_LENGTH];
+  char line[MAX_LINE_LEN];
   Pipeline pipe;
   Arena arena;
 
@@ -53,7 +52,7 @@ int main(void) {
     cshell_display_prompt();
 
     cshell_terminal_mode_raw();
-    ssize_t read_bytes = cshell_read_line(line, MAX_LINE_LENGTH);
+    ssize_t read_bytes = cshell_read_line(line, MAX_LINE_LEN);
     cshell_terminal_mode_canonical();
 
     if (read_bytes < 0) {

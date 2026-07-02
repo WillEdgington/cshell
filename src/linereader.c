@@ -1,6 +1,8 @@
 #include "cshell/linereader.h"
+#include "cshell/completion.h"
 #include "cshell/history.h"
 #include "cshell/prompt.h"
+#include "cshell/runtime.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -31,11 +33,10 @@ static void input_state_esc_seen(InputState *state, char *c) {
   *state = *c == '[' ? STATE_BRACKET_SEEN : STATE_NORMAL;
 }
 
-static void
-input_state_bracket_seen(InputState *state, char *c, char *buffer,
-                         char saved_active_line[HISTORY_MAX_LINE_LEN],
-                         int *view_index, size_t *len, size_t *cursor_pos,
-                         size_t max_len) {
+static void input_state_bracket_seen(InputState *state, char *c, char *buffer,
+                                     char saved_active_line[MAX_LINE_LEN],
+                                     int *view_index, size_t *len,
+                                     size_t *cursor_pos, size_t max_len) {
   *state = STATE_NORMAL;
 
   switch (*c) {
@@ -45,8 +46,8 @@ input_state_bracket_seen(InputState *state, char *c, char *buffer,
     if (history_size > 0 && *view_index < history_size - 1) {
       if (*view_index == -1) {
         // Save the active line before moving through history
-        strncpy(saved_active_line, buffer, HISTORY_MAX_LINE_LEN - 1);
-        saved_active_line[HISTORY_MAX_LINE_LEN - 1] = '\0';
+        strncpy(saved_active_line, buffer, MAX_LINE_LEN - 1);
+        saved_active_line[MAX_LINE_LEN - 1] = '\0';
       }
 
       (*view_index)++;
@@ -134,6 +135,66 @@ static void handle_backspace(char *buffer, size_t *len, size_t *cursor_pos) {
   move_cursor(*cursor_pos, *len);
 }
 
+static void complete_prefix(char *buffer, char *match, size_t *len,
+                            size_t *cursor_pos, size_t prefix_len,
+                            size_t max_len) {
+  size_t add_len = strlen(match) - prefix_len;
+  if (add_len == 0 || *len + add_len >= max_len)
+    return;
+
+  if (*cursor_pos < *len) {
+    size_t cur_pos = *len;
+    while (cur_pos >= *cursor_pos) {
+      buffer[cur_pos + add_len] = buffer[cur_pos];
+      if (cur_pos == 0)
+        break;
+      cur_pos--;
+    }
+  }
+
+  memcpy(&buffer[*cursor_pos], &match[prefix_len], add_len);
+
+  (*cursor_pos) += add_len;
+  (*len) += add_len;
+  buffer[*len] = '\0';
+
+  redraw_line(buffer);
+  move_cursor(*cursor_pos, *len);
+}
+
+static void handle_tab_completion(char *buffer, size_t *len, size_t *cursor_pos,
+                                  size_t max_len) {
+  if (*cursor_pos == 0) {
+    write(STDOUT_FILENO, "\a", 1);
+    return;
+  }
+
+  char prefix[MAX_LINE_LEN] = {0};
+  size_t prefix_len = 0;
+  size_t start_idx = *cursor_pos;
+
+  while (start_idx > 0 && buffer[start_idx - 1] != ' ')
+    start_idx--;
+
+  prefix_len = *cursor_pos - start_idx;
+  if (prefix_len == 0) {
+    write(STDOUT_FILENO, "\a", 1);
+    return;
+  }
+
+  strncpy(prefix, &buffer[start_idx], prefix_len);
+  prefix[prefix_len] = '\0';
+
+  int is_command = (start_idx == 0);
+
+  char match[MAX_LINE_LEN] = {0};
+  if (cshell_get_completion(prefix, is_command, match, MAX_LINE_LEN) == 1) {
+    complete_prefix(buffer, match, len, cursor_pos, prefix_len, max_len);
+  } else {
+    write(STDOUT_FILENO, "\a", 1);
+  }
+}
+
 static void handle_character_insertion(char *c, char *buffer, size_t *len,
                                        size_t *cursor_pos) {
   (*len)++;
@@ -175,6 +236,9 @@ static int input_state_normal(InputState *state, char *c, char *buffer,
       return -1;
     return 0;
   // Standard visible ASCII characters
+  case '\t':
+    handle_tab_completion(buffer, len, cursor_pos, max_len);
+    return 0;
   default:
     if (*c >= 32 && *c <= 126 && *len < max_len - 1)
       handle_character_insertion(c, buffer, len, cursor_pos);
@@ -191,7 +255,7 @@ ssize_t cshell_read_line(char *buffer, size_t max_len) {
   buffer[0] = '\0';
 
   int view_index = -1;
-  char saved_active_line[HISTORY_MAX_LINE_LEN] = {0};
+  char saved_active_line[MAX_LINE_LEN] = {0};
 
   InputState state = STATE_NORMAL;
   char c;

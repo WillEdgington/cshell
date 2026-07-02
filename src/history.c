@@ -1,7 +1,8 @@
 #include "cshell/history.h"
+#include "cshell/runtime.h"
 #include <string.h>
 
-static char history_buffer[HISTORY_MAX_ENTRIES][HISTORY_MAX_LINE_LEN];
+static char history_buffer[HISTORY_MAX_ENTRIES][MAX_LINE_LEN];
 static int history_head = 0;
 static int history_size = 0;
 
@@ -17,9 +18,9 @@ void cshell_history_add(const char *line) {
   if (line == NULL)
     return;
 
-  char clean_line[HISTORY_MAX_LINE_LEN];
-  strncpy(clean_line, line, HISTORY_MAX_LINE_LEN - 1);
-  clean_line[HISTORY_MAX_LINE_LEN - 1] = '\0';
+  char clean_line[MAX_LINE_LEN];
+  strncpy(clean_line, line, MAX_LINE_LEN - 1);
+  clean_line[MAX_LINE_LEN - 1] = '\0';
   size_t len = strlen(clean_line);
   if (len > 0 && clean_line[len - 1] == '\n')
     clean_line[len - 1] = '\0';
@@ -35,8 +36,8 @@ void cshell_history_add(const char *line) {
       return;
   }
 
-  strncpy(history_buffer[history_head], clean_line, HISTORY_MAX_LINE_LEN - 1);
-  history_buffer[history_head][HISTORY_MAX_LINE_LEN - 1] = '\0';
+  strncpy(history_buffer[history_head], clean_line, MAX_LINE_LEN - 1);
+  history_buffer[history_head][MAX_LINE_LEN - 1] = '\0';
 
   history_head = (history_head + 1) % HISTORY_MAX_ENTRIES;
   if (history_size < HISTORY_MAX_ENTRIES)
