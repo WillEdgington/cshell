@@ -48,7 +48,7 @@ int cshell_tracker_add(pid_t pid, const char *cmd_str) {
   return -1;
 }
 
-void cshell_tracker_report_and_clean(void) {
+void cshell_tracker_report_and_clean(int mute) {
   for (int i = 0; i < MAX_JOBS; i++) {
     if (job_table[i].is_allocated == 0)
       continue;
@@ -68,8 +68,11 @@ void cshell_tracker_report_and_clean(void) {
         job_table[i].status = JOB_FAILED;
       }
 
-      print_job(job_table[i]);
-      fflush(stdout);
+      if (mute == 0) {
+        print_job(job_table[i]);
+        fflush(stdout);
+      }
+
       job_table[i].is_allocated = 0;
     } else if (res == -1) { // no longer exists or reaped internally
       job_table[i].is_allocated = 0;
