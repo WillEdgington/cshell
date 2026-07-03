@@ -45,7 +45,7 @@ static void test_tracker_reaping_success(void) {
     close(out_fd);
   }
 
-  cshell_tracker_report_and_clean();
+  cshell_tracker_report_and_clean(0); // don't mute
 
   if (saved_stdout >= 0) {
     dup2(saved_stdout, STDOUT_FILENO);
@@ -89,7 +89,7 @@ static void test_tracker_reaping_failure(void) {
     close(out_fd);
   }
 
-  cshell_tracker_report_and_clean();
+  cshell_tracker_report_and_clean(0); // don't mute
 
   if (saved_stdout >= 0) {
     dup2(saved_stdout, STDOUT_FILENO);

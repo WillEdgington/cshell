@@ -19,6 +19,6 @@ typedef struct {
 
 void cshell_tracker_init(void);
 int cshell_tracker_add(pid_t pid, const char *cmd_str);
-void cshell_tracker_report_and_clean(void);
+void cshell_tracker_report_and_clean(int mute);
 
 #endif
