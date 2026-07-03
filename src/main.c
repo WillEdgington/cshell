@@ -12,6 +12,7 @@
 #include "cshell/parser.h"
 #include "cshell/prompt.h"
 #include "cshell/runtime.h"
+#include "cshell/startup.h"
 #include "cshell/terminal.h"
 #include "cshell/tracker.h"
 
@@ -44,10 +45,13 @@ int main(void) {
   cshell_history_init();
   shell_r.last_exit_status = 0;
 
+  if (cshell_run_startup(&pipe, &arena) == SHELL_STATUS_EXIT)
+    handle_exit(SIGTERM, &arena);
+
   while (1) {
     arena_reset(&arena);
     pipeline_init(&pipe, &arena);
-    cshell_tracker_report_and_clean();
+    cshell_tracker_report_and_clean(0); // don't mute
 
     cshell_display_prompt();
 
