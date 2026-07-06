@@ -194,7 +194,7 @@ static int handle_background_branch(Pipeline *pipe, pid_t last_pid,
   char cmd_str[MAX_CMD_STRING_LEN + 1];
   serialise_pipeline(pipe, cmd_str, sizeof(cmd_str));
 
-  int job_id = cshell_tracker_add(last_pid, cmd_str);
+  int job_id = cshell_tracker_add(last_pid, cmd_str, JOB_RUNNING);
   if (job_id != -1) {
     printf("[%d] %d\n", job_id, (int)last_pid);
     fflush(stdout);
@@ -222,7 +222,8 @@ static void cleanup_fork_failure(pid_t *pids, int prev_read_fd, int tunnel[2],
   sigprocmask(SIG_SETMASK, &old_set, NULL);
 }
 
-static int reap_pipeline(pid_t *pids, pid_t last_pid, int command_count) {
+static int reap_pipeline(Pipeline *pipeline, pid_t *pids, pid_t last_pid,
+                         int command_count) {
   int status;
   int terminal_exit_status = 1;
 
@@ -234,7 +235,13 @@ static int reap_pipeline(pid_t *pids, pid_t last_pid, int command_count) {
       } else if (WIFSIGNALED(status)) {
         terminal_exit_status = 128 + WTERMSIG(status);
       } else if (WIFSTOPPED(status)) {
-        terminal_exit_status = 148;
+        terminal_exit_status = SHELL_STATUS_STOPPED;
+
+        char cmd_str[MAX_CMD_STRING_LEN + 1];
+        serialise_pipeline(pipeline, cmd_str, MAX_CMD_STRING_LEN + 1);
+        int jid = cshell_tracker_add(last_pid, cmd_str, JOB_STOPPED);
+        printf("\n[%d]+  Stopped                 %s\n", jid, cmd_str);
+        fflush(stdout);
       }
     }
   }
@@ -318,7 +325,7 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
   if (pipeline->is_background)
     return handle_background_branch(pipeline, last_pid, old_set);
 
-  int status = reap_pipeline(pids, last_pid, pipeline->command_count);
+  int status = reap_pipeline(pipeline, pids, last_pid, pipeline->command_count);
 
   // Reclaim terminal control
   if (!pipeline->is_background && shell_r.is_interactive)

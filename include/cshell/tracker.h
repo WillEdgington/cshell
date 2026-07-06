@@ -6,7 +6,7 @@
 #define MAX_JOBS 32
 #define MAX_CMD_STRING_LEN 255
 
-typedef enum { JOB_RUNNING, JOB_DONE, JOB_FAILED } JobStatus;
+typedef enum { JOB_RUNNING, JOB_STOPPED, JOB_DONE, JOB_FAILED } JobStatus;
 
 typedef struct {
   pid_t pid;
@@ -18,7 +18,7 @@ typedef struct {
 } BackgroundJob;
 
 void cshell_tracker_init(void);
-int cshell_tracker_add(pid_t pid, const char *cmd_str);
+int cshell_tracker_add(pid_t pid, const char *cmd_str, JobStatus status);
 void cshell_tracker_report_and_clean(int mute);
 
 #endif

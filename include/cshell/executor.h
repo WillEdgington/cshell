@@ -4,6 +4,7 @@
 #include "cshell/parser.h"
 
 #define SHELL_STATUS_EXIT 256
+#define SHELL_STATUS_STOPPED 148
 #define NOT_FOUND_STATUS 127
 #define DENIED_STATUS 126
 
