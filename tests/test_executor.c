@@ -42,9 +42,15 @@ static void test_redirection(void) {
   Command echo_cmd = {.args = {"echo", "systems_programming", NULL},
                       .arg_count = 2,
                       .input_redirect = NULL,
-                      .output_redirect = (char *)src_file};
+                      .output_redirect = (char *)src_file,
+                      .next = NULL};
 
-  ASSERT_INT_EQ(cshell_execute_command(&echo_cmd), 0,
+  Pipeline pipe1 = {.head = &echo_cmd,
+                    .tail = &echo_cmd,
+                    .command_count = 1,
+                    .is_background = 0};
+
+  ASSERT_INT_EQ(cshell_execute_pipeline(&pipe1), 0,
                 "Pipeline execution with output redirection should return 0");
 
   FILE *src_f = fopen(src_file, "r");
@@ -66,9 +72,15 @@ static void test_redirection(void) {
   Command cat_cmd = {.args = {"cat", NULL},
                      .arg_count = 1,
                      .input_redirect = (char *)src_file,
-                     .output_redirect = (char *)dest_file};
+                     .output_redirect = (char *)dest_file,
+                     .next = NULL};
 
-  ASSERT_INT_EQ(cshell_execute_command(&cat_cmd), 0,
+  Pipeline pipe2 = {.head = &cat_cmd,
+                    .tail = &cat_cmd,
+                    .command_count = 1,
+                    .is_background = 0};
+
+  ASSERT_INT_EQ(cshell_execute_pipeline(&pipe2), 0,
                 "Pipeline execution with dual redirection should return 0");
 
   FILE *dst_f = fopen(dest_file, "r");
