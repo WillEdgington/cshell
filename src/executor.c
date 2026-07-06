@@ -2,6 +2,7 @@
 
 #include "cshell/executor.h"
 #include "cshell/expansion.h"
+#include "cshell/runtime.h"
 #include "cshell/tracker.h"
 
 #include <errno.h>
@@ -85,64 +86,6 @@ static void execute_external(const Command *cmd) {
     fprintf(stderr, "cshell: %s: %s\n", cmd->args[0], strerror(errno));
     _exit(1);
   }
-}
-
-static int execute_external_with_subshell_creation(const Command *cmd) {
-  pid_t pid = fork();
-
-  if (pid < 0) {
-    perror("cshell: fork");
-    return errno;
-  }
-
-  if (pid == 0) {
-    signal(SIGINT, SIG_DFL);
-    if (cmd->input_redirect != NULL) {
-      int in_fd = open(cmd->input_redirect, O_RDONLY);
-      if (in_fd == -1) {
-        perror("cshell: input redirection");
-        _exit(errno);
-      }
-
-      if (dup2(in_fd, STDIN_FILENO) == -1) {
-        perror("cshell: dup2 input");
-        close(in_fd);
-        _exit(errno);
-      }
-      close(in_fd);
-    }
-
-    if (cmd->output_redirect != NULL) {
-      int out_fd =
-          open(cmd->output_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-      if (out_fd == -1) {
-        perror("cshell: output redirection");
-        _exit(errno);
-      }
-
-      if (dup2(out_fd, STDOUT_FILENO) == -1) {
-        perror("cshell: dup2 output");
-        close(out_fd);
-        _exit(errno);
-      }
-      close(out_fd);
-    }
-
-    execute_external(cmd);
-  }
-
-  int status;
-  if (waitpid(pid, &status, 0) == -1) {
-    perror("cshell: waitpid");
-    return 1;
-  }
-
-  if (WIFEXITED(status)) {
-    return WEXITSTATUS(status);
-  } else if (WIFSIGNALED(status)) {
-    return 128 + WTERMSIG(status);
-  }
-  return 1;
 }
 
 static int execute_export(const Command *cmd) {
@@ -284,12 +227,14 @@ static int reap_pipeline(pid_t *pids, pid_t last_pid, int command_count) {
   int terminal_exit_status = 1;
 
   for (int i = 0; i < command_count; i++) {
-    pid_t reaped_pid = waitpid(pids[i], &status, 0);
+    pid_t reaped_pid = waitpid(pids[i], &status, WUNTRACED);
     if (reaped_pid == last_pid) {
       if (WIFEXITED(status)) {
         terminal_exit_status = WEXITSTATUS(status);
       } else if (WIFSIGNALED(status)) {
         terminal_exit_status = 128 + WTERMSIG(status);
+      } else if (WIFSTOPPED(status)) {
+        terminal_exit_status = 148;
       }
     }
   }
@@ -317,6 +262,8 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
     return -1;
   }
 
+  pid_t pgid = 0;
+
   for (int i = 0; i < pipeline->command_count; i++) {
     int tunnel[2] = {-1, -1};
 
@@ -336,10 +283,30 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
 
     if (pid == 0) {
       sigprocmask(SIG_SETMASK, &old_set, NULL);
+
+      if (i == 0) {
+        setpgid(0, 0);
+      } else {
+        setpgid(0, pgid);
+      }
+
+      if (!pipeline->is_background && shell_r.is_interactive)
+        tcsetpgrp(STDIN_FILENO, (i == 0) ? getpid() : pgid);
+
+      signal(SIGTSTP, SIG_DFL);
       signal(SIGINT, SIG_DFL);
+
       setup_child_io(cmd, prev_read_fd, tunnel);
       execute_child_dispatch(cmd);
     }
+
+    if (i == 0)
+      pgid = pid;
+
+    setpgid(pid, pgid);
+
+    if (!pipeline->is_background && shell_r.is_interactive)
+      tcsetpgrp(STDIN_FILENO, pgid);
 
     update_parent_fds(&prev_read_fd, tunnel, cmd->next != NULL ? 1 : 0);
 
@@ -352,6 +319,11 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
     return handle_background_branch(pipeline, last_pid, old_set);
 
   int status = reap_pipeline(pids, last_pid, pipeline->command_count);
+
+  // Reclaim terminal control
+  if (!pipeline->is_background && shell_r.is_interactive)
+    tcsetpgrp(STDIN_FILENO, getpgrp());
+
   sigprocmask(SIG_SETMASK, &old_set, NULL);
   return status;
 }
@@ -377,8 +349,6 @@ int cshell_execute_command(Command *cmd) {
     return SHELL_STATUS_EXIT;
   case CMD_TYPE_CD:
     return execute_cd(cmd);
-  case CMD_TYPE_EXTERNAL:
-    return execute_external_with_subshell_creation(cmd);
   case CMD_TYPE_EXPORT:
     return execute_export(cmd);
   default:
