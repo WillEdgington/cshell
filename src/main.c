@@ -29,9 +29,16 @@ static void handle_exit(int sig, Arena *a) {
   handle_shutdown(sig);
 }
 
-int main(void) {
+static void set_signals(void) {
   signal(SIGINT, SIG_IGN);
+  signal(SIGTSTP, SIG_IGN);
+  signal(SIGTTIN, SIG_IGN);
+  signal(SIGTTOU, SIG_IGN);
   signal(SIGTERM, handle_shutdown);
+}
+
+int main(void) {
+  set_signals();
 
   char line[MAX_LINE_LEN];
   Pipeline pipe;
@@ -43,7 +50,9 @@ int main(void) {
 
   cshell_terminal_init();
   cshell_history_init();
+
   shell_r.last_exit_status = 0;
+  shell_r.is_interactive = 1;
 
   if (cshell_run_startup(&pipe, &arena) == SHELL_STATUS_EXIT)
     handle_exit(SIGTERM, &arena);
