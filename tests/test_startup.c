@@ -11,9 +11,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-// Mock definitions from our framework discussion
 void setup_mock_dir(const char *path) { mkdir(path, 0777); }
+
 void teardown_mock_dir(const char *path) { rmdir(path); }
+
 void setup_mock_file(const char *path, const char *content) {
   FILE *f = fopen(path, "w");
   if (f != NULL) {
@@ -22,6 +23,7 @@ void setup_mock_file(const char *path, const char *content) {
     fclose(f);
   }
 }
+
 void teardown_mock_file(const char *path) { unlink(path); }
 
 static void test_startup_execution_flow(Arena *a) {
