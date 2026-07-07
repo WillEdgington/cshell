@@ -2,6 +2,7 @@
 
 #include "cshell/executor.h"
 #include "cshell/expansion.h"
+#include "cshell/runtime.h"
 #include "cshell/tracker.h"
 
 #include <errno.h>
@@ -87,64 +88,6 @@ static void execute_external(const Command *cmd) {
   }
 }
 
-static int execute_external_with_subshell_creation(const Command *cmd) {
-  pid_t pid = fork();
-
-  if (pid < 0) {
-    perror("cshell: fork");
-    return errno;
-  }
-
-  if (pid == 0) {
-    signal(SIGINT, SIG_DFL);
-    if (cmd->input_redirect != NULL) {
-      int in_fd = open(cmd->input_redirect, O_RDONLY);
-      if (in_fd == -1) {
-        perror("cshell: input redirection");
-        _exit(errno);
-      }
-
-      if (dup2(in_fd, STDIN_FILENO) == -1) {
-        perror("cshell: dup2 input");
-        close(in_fd);
-        _exit(errno);
-      }
-      close(in_fd);
-    }
-
-    if (cmd->output_redirect != NULL) {
-      int out_fd =
-          open(cmd->output_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-      if (out_fd == -1) {
-        perror("cshell: output redirection");
-        _exit(errno);
-      }
-
-      if (dup2(out_fd, STDOUT_FILENO) == -1) {
-        perror("cshell: dup2 output");
-        close(out_fd);
-        _exit(errno);
-      }
-      close(out_fd);
-    }
-
-    execute_external(cmd);
-  }
-
-  int status;
-  if (waitpid(pid, &status, 0) == -1) {
-    perror("cshell: waitpid");
-    return 1;
-  }
-
-  if (WIFEXITED(status)) {
-    return WEXITSTATUS(status);
-  } else if (WIFSIGNALED(status)) {
-    return 128 + WTERMSIG(status);
-  }
-  return 1;
-}
-
 static int execute_export(const Command *cmd) {
   if (cmd->arg_count < 2) {
     fprintf(stderr, "cshell: export: missing assignment statement\n");
@@ -167,6 +110,152 @@ static int execute_export(const Command *cmd) {
     return errno;
   }
   return 0;
+}
+
+static int execute_jobs(const Command *cmd) {
+  if (cmd->arg_count == 1) {
+    cshell_tracker_print_jobs();
+    return 0;
+  }
+
+  int return_val = 0;
+  for (int i = 1; i < cmd->arg_count; i++) {
+    char *arg = cmd->args[i];
+    if (arg[0] == '%')
+      arg++; // skip optional '%' prefix
+
+    char *end_ptr;
+    long job_id = strtol(arg, &end_ptr, 10); // base 10
+
+    if (*end_ptr == '\0' && job_id > 0 && job_id <= MAX_JOBS) {
+      BackgroundJob *job = cshell_tracker_get_by_id((int)job_id);
+      if (job != NULL) {
+        cshell_tracker_print_job(*job);
+        continue;
+      }
+    }
+    return_val = 1;
+    fprintf(stderr, "cshell: jobs: %s: no such job\n", cmd->args[i]);
+  }
+
+  return return_val;
+}
+
+static int execute_fg(const Command *cmd) {
+  BackgroundJob *job = NULL;
+
+  if (cmd->arg_count == 1) {
+    job = cshell_tracker_get_latest();
+    if (job == NULL) {
+      fprintf(stderr, "cshell: fg: current: no such job\n");
+      return 1;
+    }
+  } else {
+    char *arg = cmd->args[1];
+    if (arg[0] == '%')
+      arg++;
+
+    char *end_ptr;
+    long job_id = strtol(arg, &end_ptr, 10);
+    if (*end_ptr != '\0' || job_id <= 0 || job_id > MAX_JOBS ||
+        (job = cshell_tracker_get_by_id((int)job_id)) == NULL) {
+      fprintf(stderr, "cshell: fg: %s: no such job\n", cmd->args[1]);
+      return 1;
+    }
+  }
+
+  printf("%s\n", job->command_string);
+  fflush(stdout);
+
+  if (shell_r.is_interactive) {
+    tcsetpgrp(STDIN_FILENO, job->pid);
+  }
+
+  if (kill(-job->pid, SIGCONT) == -1) {
+    perror("cshell: fg: kill failed");
+    if (shell_r.is_interactive)
+      tcsetpgrp(STDIN_FILENO, getpgrp());
+    return 1;
+  }
+
+  job->is_allocated = 0;
+
+  int status;
+  int terminal_exit_status = 0;
+
+  pid_t reaped = waitpid(job->pid, &status, WUNTRACED);
+  if (reaped > 0) {
+    if (WIFEXITED(status)) {
+      terminal_exit_status = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+      terminal_exit_status = 128 + WTERMSIG(status);
+    } else if (WIFSTOPPED(status)) {
+      terminal_exit_status = SHELL_STATUS_STOPPED;
+
+      job->is_allocated = 1;
+      job->status = JOB_STOPPED;
+      printf("\n[%d]+  Stopped                 %s\n", job->job_id,
+             job->command_string);
+      fflush(stdout);
+    }
+  }
+
+  if (shell_r.is_interactive) {
+    tcsetpgrp(STDIN_FILENO, getpgrp());
+  }
+  return terminal_exit_status;
+}
+
+static int execute_bg(const Command *cmd) {
+  if (cmd->arg_count == 1) {
+    BackgroundJob *job = cshell_tracker_get_latest();
+    if (job == NULL) {
+      fprintf(stderr, "cshell: bg: current: no such job\n");
+      return 1;
+    }
+    if (kill(-job->pid, SIGCONT) == -1) {
+      perror("cshell: bg: kill failed");
+      return 1;
+    }
+
+    job->status = JOB_RUNNING;
+    printf("[%d]+ %s &\n", job->job_id, job->command_string);
+    fflush(stdout);
+    return 0;
+  }
+
+  int return_val = 0;
+
+  for (int i = 1; i < cmd->arg_count; i++) {
+    char *arg = cmd->args[i];
+    if (arg[0] == '%')
+      arg++;
+
+    char *end_ptr;
+    long job_id = strtol(arg, &end_ptr, 10); // base 10
+    if (*end_ptr != '\0' || job_id <= 0 || job_id > MAX_JOBS) {
+      fprintf(stderr, "cshell: bg: %s: no such job\n", cmd->args[i]);
+      return_val = 1;
+      continue;
+    }
+
+    BackgroundJob *job = cshell_tracker_get_by_id(job_id);
+    if (job == NULL) {
+      fprintf(stderr, "cshell: bg: %s: no such job\n", cmd->args[i]);
+      return_val = 1;
+      continue;
+    }
+
+    if (kill(-job->pid, SIGCONT) == -1) {
+      perror("cshell: bg: kill failed");
+      return 1;
+    }
+
+    job->status = JOB_RUNNING;
+    printf("[%d]+ %s &\n", job->job_id, job->command_string);
+    fflush(stdout);
+  }
+  return return_val;
 }
 
 static void setup_child_io(const Command *cmd, int prev_read_fd,
@@ -231,6 +320,12 @@ static void execute_child_dispatch(const Command *cmd) {
     break;
   case CMD_TYPE_EXPORT:
     _exit(execute_export(cmd));
+  case CMD_TYPE_JOBS:
+    _exit(execute_jobs(cmd));
+  case CMD_TYPE_FG:
+    _exit(execute_fg(cmd));
+  case CMD_TYPE_BG:
+    _exit(execute_bg(cmd));
   default:
     _exit(1);
   }
@@ -251,7 +346,7 @@ static int handle_background_branch(Pipeline *pipe, pid_t last_pid,
   char cmd_str[MAX_CMD_STRING_LEN + 1];
   serialise_pipeline(pipe, cmd_str, sizeof(cmd_str));
 
-  int job_id = cshell_tracker_add(last_pid, cmd_str);
+  int job_id = cshell_tracker_add(last_pid, cmd_str, JOB_RUNNING);
   if (job_id != -1) {
     printf("[%d] %d\n", job_id, (int)last_pid);
     fflush(stdout);
@@ -279,17 +374,26 @@ static void cleanup_fork_failure(pid_t *pids, int prev_read_fd, int tunnel[2],
   sigprocmask(SIG_SETMASK, &old_set, NULL);
 }
 
-static int reap_pipeline(pid_t *pids, pid_t last_pid, int command_count) {
+static int reap_pipeline(Pipeline *pipeline, pid_t *pids, pid_t last_pid,
+                         int command_count) {
   int status;
   int terminal_exit_status = 1;
 
   for (int i = 0; i < command_count; i++) {
-    pid_t reaped_pid = waitpid(pids[i], &status, 0);
+    pid_t reaped_pid = waitpid(pids[i], &status, WUNTRACED);
     if (reaped_pid == last_pid) {
       if (WIFEXITED(status)) {
         terminal_exit_status = WEXITSTATUS(status);
       } else if (WIFSIGNALED(status)) {
         terminal_exit_status = 128 + WTERMSIG(status);
+      } else if (WIFSTOPPED(status)) {
+        terminal_exit_status = SHELL_STATUS_STOPPED;
+
+        char cmd_str[MAX_CMD_STRING_LEN + 1];
+        serialise_pipeline(pipeline, cmd_str, MAX_CMD_STRING_LEN + 1);
+        int jid = cshell_tracker_add(last_pid, cmd_str, JOB_STOPPED);
+        printf("\n[%d]+  Stopped                 %s\n", jid, cmd_str);
+        fflush(stdout);
       }
     }
   }
@@ -317,6 +421,8 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
     return -1;
   }
 
+  pid_t pgid = 0;
+
   for (int i = 0; i < pipeline->command_count; i++) {
     int tunnel[2] = {-1, -1};
 
@@ -336,10 +442,30 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
 
     if (pid == 0) {
       sigprocmask(SIG_SETMASK, &old_set, NULL);
+
+      if (i == 0) {
+        setpgid(0, 0);
+      } else {
+        setpgid(0, pgid);
+      }
+
+      if (!pipeline->is_background && shell_r.is_interactive)
+        tcsetpgrp(STDIN_FILENO, (i == 0) ? getpid() : pgid);
+
+      signal(SIGTSTP, SIG_DFL);
       signal(SIGINT, SIG_DFL);
+
       setup_child_io(cmd, prev_read_fd, tunnel);
       execute_child_dispatch(cmd);
     }
+
+    if (i == 0)
+      pgid = pid;
+
+    setpgid(pid, pgid);
+
+    if (!pipeline->is_background && shell_r.is_interactive)
+      tcsetpgrp(STDIN_FILENO, pgid);
 
     update_parent_fds(&prev_read_fd, tunnel, cmd->next != NULL ? 1 : 0);
 
@@ -351,7 +477,12 @@ static int execute_multi_cmd_pipeline(Pipeline *pipeline) {
   if (pipeline->is_background)
     return handle_background_branch(pipeline, last_pid, old_set);
 
-  int status = reap_pipeline(pids, last_pid, pipeline->command_count);
+  int status = reap_pipeline(pipeline, pids, last_pid, pipeline->command_count);
+
+  // Reclaim terminal control
+  if (!pipeline->is_background && shell_r.is_interactive)
+    tcsetpgrp(STDIN_FILENO, getpgrp());
+
   sigprocmask(SIG_SETMASK, &old_set, NULL);
   return status;
 }
@@ -365,6 +496,12 @@ CommandType cshell_resolve_command(const Command *cmd) {
     return CMD_TYPE_CD;
   } else if (strcmp(cmd->args[0], "export") == 0) {
     return CMD_TYPE_EXPORT;
+  } else if (strcmp(cmd->args[0], "jobs") == 0) {
+    return CMD_TYPE_JOBS;
+  } else if (strcmp(cmd->args[0], "fg") == 0) {
+    return CMD_TYPE_FG;
+  } else if (strcmp(cmd->args[0], "bg") == 0) {
+    return CMD_TYPE_BG;
   }
   return CMD_TYPE_EXTERNAL;
 }
@@ -377,10 +514,14 @@ int cshell_execute_command(Command *cmd) {
     return SHELL_STATUS_EXIT;
   case CMD_TYPE_CD:
     return execute_cd(cmd);
-  case CMD_TYPE_EXTERNAL:
-    return execute_external_with_subshell_creation(cmd);
   case CMD_TYPE_EXPORT:
     return execute_export(cmd);
+  case CMD_TYPE_JOBS:
+    return execute_jobs(cmd);
+  case CMD_TYPE_FG:
+    return execute_fg(cmd);
+  case CMD_TYPE_BG:
+    return execute_bg(cmd);
   default:
     fprintf(stderr, "cshell: excecute: unknown command type\n");
     return -1;

@@ -1,11 +1,30 @@
 #define _GNU_SOURCE
 
 #include "cshell/executor.h"
+#include "cshell/runtime.h"
 #include "cshell/test_framework.h"
+#include "cshell/tracker.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+static int mute_output(int std_flag) {
+  int saved_stdout = dup(std_flag);
+  int dev_null = open("/dev/null", O_WRONLY);
+  if (dev_null >= 0) {
+    dup2(dev_null, std_flag);
+    close(dev_null);
+  }
+  return saved_stdout;
+}
+
+static void unmute_output(int saved_stdout, int std_flag) {
+  if (saved_stdout >= 0) {
+    dup2(saved_stdout, std_flag);
+    close(saved_stdout);
+  }
+}
 
 static void test_empty_arg(void) {
   Command cmd = {.args = {NULL}, .arg_count = 0};
@@ -42,9 +61,15 @@ static void test_redirection(void) {
   Command echo_cmd = {.args = {"echo", "systems_programming", NULL},
                       .arg_count = 2,
                       .input_redirect = NULL,
-                      .output_redirect = (char *)src_file};
+                      .output_redirect = (char *)src_file,
+                      .next = NULL};
 
-  ASSERT_INT_EQ(cshell_execute_command(&echo_cmd), 0,
+  Pipeline pipe1 = {.head = &echo_cmd,
+                    .tail = &echo_cmd,
+                    .command_count = 1,
+                    .is_background = 0};
+
+  ASSERT_INT_EQ(cshell_execute_pipeline(&pipe1), 0,
                 "Pipeline execution with output redirection should return 0");
 
   FILE *src_f = fopen(src_file, "r");
@@ -66,9 +91,15 @@ static void test_redirection(void) {
   Command cat_cmd = {.args = {"cat", NULL},
                      .arg_count = 1,
                      .input_redirect = (char *)src_file,
-                     .output_redirect = (char *)dest_file};
+                     .output_redirect = (char *)dest_file,
+                     .next = NULL};
 
-  ASSERT_INT_EQ(cshell_execute_command(&cat_cmd), 0,
+  Pipeline pipe2 = {.head = &cat_cmd,
+                    .tail = &cat_cmd,
+                    .command_count = 1,
+                    .is_background = 0};
+
+  ASSERT_INT_EQ(cshell_execute_pipeline(&pipe2), 0,
                 "Pipeline execution with dual redirection should return 0");
 
   FILE *dst_f = fopen(dest_file, "r");
@@ -286,12 +317,62 @@ void test_export(void) {
   test_export_subshell_isolation();
 }
 
+static void test_job_control_builtins_execution(void) {
+  cshell_tracker_init();
+  shell_r.is_interactive = 0;
+
+  Command jobs_cmd_res = {.args = {"jobs", NULL}, .arg_count = 1};
+  ASSERT_INT_EQ(cshell_resolve_command(&jobs_cmd_res), CMD_TYPE_JOBS,
+                "jobs should resolve to CMD_TYPE_JOBS");
+
+  Command fg_cmd_res = {.args = {"fg", NULL}, .arg_count = 1};
+  ASSERT_INT_EQ(cshell_resolve_command(&fg_cmd_res), CMD_TYPE_FG,
+                "fg should resolve to CMD_TYPE_FG");
+
+  Command bg_cmd_res = {.args = {"bg", NULL}, .arg_count = 1};
+  ASSERT_INT_EQ(cshell_resolve_command(&bg_cmd_res), CMD_TYPE_BG,
+                "bg should resolve to CMD_TYPE_BG");
+
+  int saved_stderr = mute_output(STDERR_FILENO);
+  int saved_stdout = mute_output(STDOUT_FILENO);
+
+  cshell_tracker_add(98765, "mock_task", JOB_STOPPED);
+
+  Command jobs_arg = {.args = {"jobs", "1", "%1", NULL}, .arg_count = 3};
+  int jobs_status = cshell_execute_command(&jobs_arg);
+
+  Command jobs_bad = {.args = {"jobs", "99", NULL}, .arg_count = 2};
+  int bad_jobs_status = cshell_execute_command(&jobs_bad);
+
+  Command bg_missing = {.args = {"bg", "%5", NULL}, .arg_count = 2};
+  int bg_status = cshell_execute_command(&bg_missing);
+
+  cshell_tracker_init();
+  Command fg_empty = {.args = {"fg", NULL}, .arg_count = 1};
+  int fg_status = cshell_execute_command(&fg_empty);
+
+  unmute_output(saved_stderr, STDERR_FILENO);
+  unmute_output(saved_stdout, STDOUT_FILENO);
+
+  ASSERT_INT_EQ(jobs_status, 0,
+                "Executing jobs with existing targets should complete cleanly");
+  ASSERT_INT_EQ(
+      bad_jobs_status, 1,
+      "Searching for non-existent indexes should cause failure returns");
+  ASSERT_INT_EQ(bg_status, 1,
+                "bg command targeted at empty job records must fail safely");
+  ASSERT_INT_EQ(
+      fg_status, 1,
+      "fg command running against an empty tracking context must fail safely");
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
   test_all_args();
   test_pipeline_execution();
   test_export();
+  test_job_control_builtins_execution();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;

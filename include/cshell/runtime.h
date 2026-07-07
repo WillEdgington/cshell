@@ -5,6 +5,7 @@
 
 typedef struct {
   int last_exit_status;
+  int is_interactive;
 } ShellRuntime;
 
 extern ShellRuntime shell_r;
