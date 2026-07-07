@@ -168,12 +168,40 @@ static void test_tracker_suspension_and_resumption(void) {
   waitpid(pid, &dummy, 0);
 }
 
+static void test_tracker_retrieval_getters(void) {
+  cshell_tracker_init();
+
+  int j1 = cshell_tracker_add(55555, "sleep 50 &", JOB_RUNNING);
+  int j2 = cshell_tracker_add(55556, "sleep 60", JOB_STOPPED);
+
+  BackgroundJob *job_pt1 = cshell_tracker_get_by_id(j1);
+  ASSERT_PTR_NOT_NULL(job_pt1, "Should retrieve job 1 pointer successfully");
+  ASSERT_INT_EQ(job_pt1->pid, 55555,
+                "Retrieved job PID must exactly match corresponding element");
+
+  BackgroundJob *invalid_job_high = cshell_tracker_get_by_id(99);
+  ASSERT_PTR_NULL(invalid_job_high,
+                  "Requesting an unallocated job index must return NULL");
+
+  BackgroundJob *invalid_job_low = cshell_tracker_get_by_id(0);
+  ASSERT_PTR_NULL(invalid_job_low,
+                  "Job index 0 is out of bounds and must return NULL");
+
+  BackgroundJob *latest = cshell_tracker_get_latest();
+  ASSERT_PTR_NOT_NULL(latest,
+                      "Latest allocation lookup should not return NULL");
+  ASSERT_INT_EQ(
+      latest->job_id, j2,
+      "Latest job pointer must return the highest indexed active allocation");
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
   test_tracker_lifecycle();
   test_tracker_reaping();
   test_tracker_suspension_and_resumption();
+  test_tracker_retrieval_getters();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;
