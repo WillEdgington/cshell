@@ -9,7 +9,7 @@
 
 static BackgroundJob job_table[MAX_JOBS];
 
-static void print_job(BackgroundJob job) {
+void cshell_tracker_print_job(BackgroundJob job) {
   switch (job.status) {
   case JOB_DONE:
     printf("[%d]+  Done                    %s\n", job.job_id,
@@ -24,7 +24,9 @@ static void print_job(BackgroundJob job) {
            job.command_string);
     break;
   case JOB_RUNNING:
-    return;
+    printf("[%d]   Running                    %s\n", job.job_id,
+           job.command_string);
+    break;
   }
 }
 
@@ -84,7 +86,8 @@ void cshell_tracker_report_and_clean(int mute) {
       }
 
       if (mute == 0) {
-        print_job(job_table[i]);
+        if (job_table[i].status != JOB_RUNNING)
+          cshell_tracker_print_job(job_table[i]);
         fflush(stdout);
       }
 
@@ -95,4 +98,32 @@ void cshell_tracker_report_and_clean(int mute) {
       job_table[i].is_allocated = 0;
     }
   }
+}
+
+void cshell_tracker_print_jobs(void) {
+  for (int i = 0; i < MAX_JOBS; i++) {
+    if (job_table[i].is_allocated == 0)
+      continue;
+
+    cshell_tracker_print_job(job_table[i]);
+    fflush(stdout);
+  }
+}
+
+BackgroundJob *cshell_tracker_get_by_id(int job_id) {
+  if (job_id > MAX_JOBS || job_id <= 0)
+    return NULL;
+
+  if (job_table[job_id - 1].is_allocated == 0)
+    return NULL;
+
+  return &job_table[job_id - 1];
+}
+
+BackgroundJob *cshell_tracker_get_latest(void) {
+  for (int i = MAX_JOBS - 1; i >= 0; i--) {
+    if (job_table[i].is_allocated == 1)
+      return &job_table[i];
+  }
+  return NULL;
 }

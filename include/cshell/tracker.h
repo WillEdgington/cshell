@@ -20,5 +20,9 @@ typedef struct {
 void cshell_tracker_init(void);
 int cshell_tracker_add(pid_t pid, const char *cmd_str, JobStatus status);
 void cshell_tracker_report_and_clean(int mute);
+void cshell_tracker_print_jobs(void);
+void cshell_tracker_print_job(BackgroundJob job);
+BackgroundJob *cshell_tracker_get_by_id(int job_id);
+BackgroundJob *cshell_tracker_get_latest(void);
 
 #endif
