@@ -177,6 +177,63 @@ static void test_linereader_tab_completion(void) {
                 "Returned length must match the expanded string size");
 }
 
+static void test_linereader_double_tab_listing(void) {
+  char buf[MAX_LINE_LEN];
+  char *f1 = "_test_s_f_3854";
+  char *f2 = "_test_long_filename_5839993";
+
+  setup_mock_file(f1);
+  setup_mock_file(f2);
+
+  const char input_stream[] = "_test_\t\t\n";
+  feed_mock_input(input_stream, strlen(input_stream));
+
+  const char *layout_log = "_test_linereader_layout_77766654.txt";
+  unlink(layout_log);
+
+  int saved_stdout = dup(STDOUT_FILENO);
+  int out_fd = open(layout_log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (out_fd >= 0) {
+    dup2(out_fd, STDOUT_FILENO);
+    close(out_fd);
+  }
+
+  ssize_t ret = cshell_read_line(buf, sizeof(buf));
+
+  if (saved_stdout >= 0) {
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+  }
+
+  teardown_mock_file(f1);
+  teardown_mock_file(f2);
+
+  ASSERT_STR_EQ(buf, "_test_",
+                "Line buffer must be preserved cleanly after menu drawing");
+  ASSERT_INT_EQ(
+      (int)ret, 6,
+      "Line reader count must accurately reflect unchanged prompt payload");
+
+  FILE *f = fopen(layout_log, "r");
+  if (f != NULL) {
+    char file_content[512] = {0};
+    fread(file_content, 1, sizeof(file_content) - 1, f);
+    fclose(f);
+
+    ASSERT_PTR_NOT_NULL(
+        strstr(file_content, "_test_long_filen... "),
+        "Long entries should be truncated with standard trailing ellipses");
+    ASSERT_PTR_NOT_NULL(
+        strstr(file_content, f1),
+        "Short entries should align using default column space pads");
+  } else {
+    // This test will fail if shown
+    ASSERT_PTR_NOT_NULL(f,
+                        "Captured layout file must be readable with fopen()");
+  }
+  unlink(layout_log);
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
@@ -185,6 +242,7 @@ int main(void) {
   test_linereader_history_navigation();
   test_linereader_horizontal_cursor_navigation();
   test_linereader_tab_completion();
+  test_linereader_double_tab_listing();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;
