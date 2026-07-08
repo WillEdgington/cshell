@@ -4,10 +4,14 @@
 #include "cshell/prompt.h"
 #include "cshell/runtime.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 typedef enum { STATE_NORMAL, STATE_ESC_SEEN, STATE_BRACKET_SEEN } InputState;
+
+static size_t MATCH_COL_LEN = 20;
+static int MATCH_NUM_COLS = 6;
 
 static void move_cursor(size_t cursor_pos, size_t len) {
   if (cursor_pos < len) {
@@ -162,8 +166,92 @@ static void complete_prefix(char *buffer, char *match, size_t *len,
   move_cursor(*cursor_pos, *len);
 }
 
+static void print_and_free_matches(char **matches, int match_count) {
+  size_t limit = MATCH_COL_LEN - 4;
+
+  for (int i = 0; i < match_count && i < MAX_COMPLETION_LIST_LEN; i++) {
+    if (i % MATCH_NUM_COLS == 0) {
+      write(STDOUT_FILENO, "\n", 1);
+    }
+
+    char display_buf[64];
+    size_t m_len = strlen(matches[i]);
+
+    if (m_len > limit) {
+      memcpy(display_buf, matches[i], limit);
+      memcpy(&display_buf[limit], "... ", 4);
+      display_buf[MATCH_COL_LEN] = '\0';
+    } else {
+      strncpy(display_buf, matches[i], sizeof(display_buf) - 1);
+      display_buf[sizeof(display_buf) - 1] = '\0';
+    }
+
+    size_t d_len = strlen(display_buf);
+    write(STDOUT_FILENO, display_buf, d_len);
+
+    for (size_t j = 0; j < MATCH_COL_LEN - d_len; j++) {
+      write(STDOUT_FILENO, " ", 1);
+    }
+
+    free(matches[i]);
+  }
+  write(STDOUT_FILENO, "\n", 1);
+
+  if (match_count > MAX_COMPLETION_LIST_LEN) {
+    char diagnostic[128];
+    snprintf(diagnostic, sizeof(diagnostic),
+             "%d more possibilities were found...\n",
+             match_count - MAX_COMPLETION_LIST_LEN);
+    write(STDOUT_FILENO, diagnostic, strlen(diagnostic));
+  }
+}
+
+static void handle_completion_listing(char *buffer, size_t *len,
+                                      size_t *cursor_pos) {
+  if (*cursor_pos == 0) {
+    write(STDOUT_FILENO, "\a", 1);
+    return;
+  }
+
+  char prefix[MAX_LINE_LEN] = {0};
+  size_t prefix_len = 0;
+  size_t start_idx = *cursor_pos;
+
+  while (start_idx > 0 && buffer[start_idx - 1] != ' ')
+    start_idx--;
+
+  prefix_len = *cursor_pos - start_idx;
+  if (prefix_len == 0) {
+    write(STDOUT_FILENO, "\a", 1);
+    return;
+  }
+
+  strncpy(prefix, &buffer[start_idx], prefix_len);
+  prefix[prefix_len] = '\0';
+
+  int is_command = (start_idx == 0);
+
+  char *matches_out[MAX_COMPLETION_LIST_LEN];
+  int match_count =
+      cshell_completion_list_matches(prefix, is_command, matches_out);
+
+  if (match_count == 0)
+    return;
+
+  print_and_free_matches(matches_out, match_count);
+
+  redraw_line(buffer);
+  move_cursor(*cursor_pos, *len);
+}
+
 static void handle_tab_completion(char *buffer, size_t *len, size_t *cursor_pos,
-                                  size_t max_len) {
+                                  int *tab_count, size_t max_len) {
+  if (*tab_count > 0) {
+    handle_completion_listing(buffer, len, cursor_pos);
+    return;
+  }
+  (*tab_count)++;
+
   if (*cursor_pos == 0) {
     write(STDOUT_FILENO, "\a", 1);
     return;
@@ -190,6 +278,7 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t *cursor_pos,
   char match[MAX_LINE_LEN] = {0};
   if (cshell_get_completion(prefix, is_command, match, MAX_LINE_LEN) == 1) {
     complete_prefix(buffer, match, len, cursor_pos, prefix_len, max_len);
+    *tab_count = 0;
   } else {
     write(STDOUT_FILENO, "\a", 1);
   }
@@ -215,7 +304,8 @@ static void handle_character_insertion(char *c, char *buffer, size_t *len,
 }
 
 static int input_state_normal(InputState *state, char *c, char *buffer,
-                              size_t *len, size_t *cursor_pos, size_t max_len) {
+                              size_t *len, size_t *cursor_pos, int *tab_count,
+                              size_t max_len) {
   switch (*c) {
   // Escape
   case '\033':
@@ -228,6 +318,7 @@ static int input_state_normal(InputState *state, char *c, char *buffer,
   // Backspace
   case 0x7F:
   case 0x08:
+    *tab_count = 0;
     handle_backspace(buffer, len, cursor_pos);
     return 0;
   // CTRL+D (EOF Handled only on empty prompt line)
@@ -237,9 +328,10 @@ static int input_state_normal(InputState *state, char *c, char *buffer,
     return 0;
   // Standard visible ASCII characters
   case '\t':
-    handle_tab_completion(buffer, len, cursor_pos, max_len);
+    handle_tab_completion(buffer, len, cursor_pos, tab_count, max_len);
     return 0;
   default:
+    *tab_count = 0;
     if (*c >= 32 && *c <= 126 && *len < max_len - 1)
       handle_character_insertion(c, buffer, len, cursor_pos);
     return 0;
@@ -259,6 +351,7 @@ ssize_t cshell_read_line(char *buffer, size_t max_len) {
 
   InputState state = STATE_NORMAL;
   char c;
+  int tab_count = 0;
 
   while (1) {
     ssize_t n = read(STDIN_FILENO, &c, 1);
@@ -268,15 +361,17 @@ ssize_t cshell_read_line(char *buffer, size_t max_len) {
     // State machine logic
     switch (state) {
     case STATE_ESC_SEEN:
+      tab_count = 0;
       input_state_esc_seen(&state, &c);
       continue;
     case STATE_BRACKET_SEEN:
+      tab_count = 0;
       input_state_bracket_seen(&state, &c, buffer, saved_active_line,
                                &view_index, &len, &cursor_pos, max_len);
       continue;
     default: {
-      int status =
-          input_state_normal(&state, &c, buffer, &len, &cursor_pos, max_len);
+      int status = input_state_normal(&state, &c, buffer, &len, &cursor_pos,
+                                      &tab_count, max_len);
       if (status != 0)
         return status == -1 ? -1 : (ssize_t)len;
       continue;
