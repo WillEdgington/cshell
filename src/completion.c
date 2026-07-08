@@ -47,6 +47,47 @@ static void scan_directory(const char *dir_path, const char *prefix,
   closedir(dir);
 }
 
+static void scan_directory_list(const char *dir_path, const char *prefix,
+                                const char *target_prefix_dir,
+                                char **matches_out, int *match_count) {
+  DIR *dir = opendir(dir_path);
+  if (dir == NULL)
+    return;
+
+  size_t prefix_len = strlen(prefix);
+  struct dirent *entry;
+
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+
+    if (strncmp(entry->d_name, prefix, prefix_len) == 0) {
+      if (*match_count < MAX_COMPLETION_LIST_LEN) {
+        char formatted_name[MAX_LINE_LEN];
+        if (entry->d_type == DT_DIR) {
+          snprintf(formatted_name, sizeof(formatted_name), "%s/",
+                   entry->d_name);
+        } else {
+          snprintf(formatted_name, sizeof(formatted_name), "%s ",
+                   entry->d_name);
+        }
+
+        if (target_prefix_dir != NULL) {
+          char full_path[MAX_LINE_LEN];
+          snprintf(full_path, sizeof(full_path), "%s%s", target_prefix_dir,
+                   formatted_name);
+          matches_out[*match_count] = strdup(formatted_name);
+        } else {
+          matches_out[*match_count] = strdup(formatted_name);
+        }
+      }
+      (*match_count)++;
+    }
+  }
+  closedir(dir);
+}
+
 int cshell_get_completion(const char *prefix, int is_command,
                           char *output_match, size_t max_len) {
   if (prefix == NULL || output_match == NULL || max_len == 0)
@@ -99,4 +140,52 @@ int cshell_get_completion(const char *prefix, int is_command,
   }
 
   return (match_count > 0 && strlen(output_match) > strlen(prefix)) ? 1 : 0;
+}
+
+int cshell_completion_list_matches(const char *prefix, int is_command,
+                                   char **matches_out) {
+  if (prefix == NULL || matches_out == NULL)
+    return 0;
+
+  int match_count = 0;
+  char target_dir[MAX_LINE_LEN] = ".";
+  const char *search_fragment = prefix;
+  const char *target_prefix_dir = NULL;
+
+  const char *last_slash = strrchr(prefix, '/');
+  if (last_slash != NULL) {
+    size_t dir_len = last_slash - prefix + 1;
+    if (dir_len < sizeof(target_dir)) {
+      strncpy(target_dir, prefix, dir_len);
+      target_dir[dir_len] = '\0';
+    }
+    search_fragment = last_slash + 1;
+    target_prefix_dir = target_dir;
+  }
+
+  if (is_command && last_slash == NULL) {
+    const char *raw_path = getenv("PATH");
+    if (raw_path != NULL) {
+      char *path_copy = strdup(raw_path);
+      if (path_copy != NULL) {
+        char *dir_path = strtok(path_copy, ":");
+        while (dir_path != NULL) {
+          scan_directory_list(dir_path, search_fragment, target_prefix_dir,
+                              matches_out, &match_count);
+          dir_path = strtok(NULL, ":");
+        }
+        free(path_copy);
+      }
+    }
+
+    if (match_count == 0) {
+      scan_directory_list(".", search_fragment, target_prefix_dir, matches_out,
+                          &match_count);
+    }
+  } else {
+    scan_directory_list(target_dir, search_fragment, target_prefix_dir,
+                        matches_out, &match_count);
+  }
+
+  return match_count;
 }
