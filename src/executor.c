@@ -258,6 +258,16 @@ static int execute_bg(const Command *cmd) {
   return return_val;
 }
 
+static int execute_clear(const Command *cmd) {
+  if (cmd->arg_count > 1) {
+    fprintf(stderr, "cshell: clear: too many arguments\n");
+    return 1;
+  }
+  write(STDOUT_FILENO, "\033[2J\033[3J\033[H", 11);
+  fflush(stdout);
+  return 0;
+}
+
 static void setup_child_io(const Command *cmd, int prev_read_fd,
                            int tunnel[2]) {
   if (prev_read_fd != STDIN_FILENO) {
@@ -326,6 +336,8 @@ static void execute_child_dispatch(const Command *cmd) {
     _exit(execute_fg(cmd));
   case CMD_TYPE_BG:
     _exit(execute_bg(cmd));
+  case CMD_TYPE_CLEAR:
+    _exit(execute_clear(cmd));
   default:
     _exit(1);
   }
@@ -502,6 +514,8 @@ CommandType cshell_resolve_command(const Command *cmd) {
     return CMD_TYPE_FG;
   } else if (strcmp(cmd->args[0], "bg") == 0) {
     return CMD_TYPE_BG;
+  } else if (strcmp(cmd->args[0], "clear") == 0) {
+    return CMD_TYPE_CLEAR;
   }
   return CMD_TYPE_EXTERNAL;
 }
@@ -522,6 +536,8 @@ int cshell_execute_command(Command *cmd) {
     return execute_fg(cmd);
   case CMD_TYPE_BG:
     return execute_bg(cmd);
+  case CMD_TYPE_CLEAR:
+    return execute_clear(cmd);
   default:
     fprintf(stderr, "cshell: excecute: unknown command type\n");
     return -1;
