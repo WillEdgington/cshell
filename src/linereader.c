@@ -166,6 +166,12 @@ static void complete_prefix(char *buffer, char *match, size_t *len,
   move_cursor(*cursor_pos, *len);
 }
 
+static void handle_clear_screen(char *buffer, size_t *len, size_t *cursor_pos) {
+  write(STDOUT_FILENO, "\033[2J\033[3J\033[H", 11);
+  redraw_line(buffer);
+  move_cursor(*cursor_pos, *len);
+}
+
 static void print_and_free_matches(char **matches, int match_count) {
   size_t limit = MATCH_COL_LEN - 4;
 
@@ -325,6 +331,11 @@ static int input_state_normal(InputState *state, char *c, char *buffer,
   case 0x04:
     if (*len == 0)
       return -1;
+    return 0;
+  // CTRL+L (Clear screen)
+  case 0x0C:
+    *tab_count = 0;
+    handle_clear_screen(buffer, len, cursor_pos);
     return 0;
   // Standard visible ASCII characters
   case '\t':

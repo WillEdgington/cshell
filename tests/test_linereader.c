@@ -234,6 +234,51 @@ static void test_linereader_double_tab_listing(void) {
   unlink(layout_log);
 }
 
+static void test_linereader_clear_hotkey(void) {
+  char buf[MAX_LINE_LEN];
+  const char input_stream[] = {'h', 'i', 0x0C, 'o', 'k', '\n', '\0'};
+  feed_mock_input(input_stream, strlen(input_stream));
+
+  const char *hotkey_log = "_test_clear_hotkey_77584999.txt";
+  unlink(hotkey_log);
+
+  int saved_stdout = dup(STDOUT_FILENO);
+  int log_fd = open(hotkey_log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (log_fd >= 0) {
+    dup2(log_fd, STDOUT_FILENO);
+    close(log_fd);
+  }
+
+  ssize_t ret = cshell_read_line(buf, sizeof(buf));
+
+  if (saved_stdout >= 0) {
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+  }
+
+  ASSERT_STR_EQ(buf, "hiok",
+                "Prompt string state must be perfectly preserved over clear "
+                "screen hotkeys");
+  ASSERT_INT_EQ(
+      (int)ret, 4,
+      "Returned reading length must reflect cumulative characters typed");
+
+  FILE *f = fopen(hotkey_log, "r");
+  if (f != NULL) {
+    char log_content[256] = {0};
+    fread(log_content, 1, sizeof(log_content) - 1, f);
+    fclose(f);
+
+    ASSERT_PTR_NOT_NULL(strstr(log_content, "\033[2J\033[3J\033[H"),
+                        "The exact 11-byte terminal erasure string must be "
+                        "emitted on Ctrl+L capture");
+  } else {
+    ASSERT_PTR_NOT_NULL(
+        f, "Captured hot-key output log must be readable with fopen()");
+  }
+  unlink(hotkey_log);
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
@@ -243,6 +288,7 @@ int main(void) {
   test_linereader_horizontal_cursor_navigation();
   test_linereader_tab_completion();
   test_linereader_double_tab_listing();
+  test_linereader_clear_hotkey();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;
