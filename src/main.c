@@ -16,8 +16,6 @@
 #include "cshell/terminal.h"
 #include "cshell/tracker.h"
 
-#define PIPELINE_ARENA_SLAB_SIZE 8192 // 8 KB
-
 static void handle_shutdown(int sig) {
   (void)sig;
   printf("\n");
