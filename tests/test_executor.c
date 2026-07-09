@@ -411,6 +411,32 @@ static void test_clear_builtin(void) {
   unlink(temp_log);
 }
 
+static void test_source_builtin(void) {
+  Command cmd_source = {.args = {"source", "script.sh", NULL}, .arg_count = 2};
+  Command cmd_dot = {.args = {".", "script.sh", NULL}, .arg_count = 2};
+  Command cmd_bad_args = {.args = {"source", NULL}, .arg_count = 1};
+
+  shell_r.last_exit_status = 0;
+
+  ASSERT_INT_EQ(cshell_resolve_command(&cmd_source), CMD_TYPE_SOURCE,
+                "The 'source' token must resolve to CMD_TYPE_SOURCE");
+  ASSERT_INT_EQ(cshell_resolve_command(&cmd_dot), CMD_TYPE_SOURCE,
+                "The '.' alias token must resolve to CMD_TYPE_SOURCE");
+
+  int saved_stderr = mute_output(STDERR_FILENO);
+
+  int err_status = cshell_execute_command(&cmd_bad_args);
+
+  unmute_output(saved_stderr, STDERR_FILENO);
+
+  ASSERT_INT_EQ(
+      err_status, 1,
+      "Executing source without a filename parameter must fail with status 1");
+  ASSERT_INT_EQ(shell_r.last_exit_status, 1,
+                "The global last_exit_status registry must track the argument "
+                "error (source execution)");
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
@@ -419,6 +445,7 @@ int main(void) {
   test_export();
   test_job_control_builtins_execution();
   test_clear_builtin();
+  test_source_builtin();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;
