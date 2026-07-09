@@ -366,6 +366,51 @@ static void test_job_control_builtins_execution(void) {
       "fg command running against an empty tracking context must fail safely");
 }
 
+static void test_clear_builtin(void) {
+  Command cmd = {.args = {"clear", NULL}, .arg_count = 1};
+
+  ASSERT_INT_EQ(cshell_resolve_command(&cmd), CMD_TYPE_CLEAR,
+                "The 'clear' token must resolve to CMD_TYPE_CLEAR");
+
+  const char *temp_log = "_test_clear_exec_58395555.txt";
+  unlink(temp_log);
+
+  int saved_stdout = dup(STDOUT_FILENO);
+  int log_fd = open(temp_log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (log_fd >= 0) {
+    dup2(log_fd, STDOUT_FILENO);
+    close(log_fd);
+  }
+
+  int exit_status = cshell_execute_command(&cmd);
+
+  if (saved_stdout >= 0) {
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+  }
+
+  ASSERT_INT_EQ(exit_status, 0,
+                "The clear built-in command must return an exit code of 0");
+
+  FILE *f = fopen(temp_log, "r");
+  if (f != NULL) {
+    char out_buf[32] = {0};
+    size_t bytes_read = fread(out_buf, 1, sizeof(out_buf) - 1, f);
+    fclose(f);
+
+    ASSERT_INT_EQ(
+        (int)bytes_read, 11,
+        "Clear output must emit exactly 11 bytes of VT100 control text");
+    ASSERT_STR_EQ(
+        out_buf, "\033[2J\033[3J\033[H",
+        "Clear built-in must write the exact screen+scrollback purge stream");
+  } else {
+    ASSERT_PTR_NOT_NULL(
+        f, "Captured temp execution log must be readable with fopen()");
+  }
+  unlink(temp_log);
+}
+
 int main(void) {
   printf("\nRunning: %s\n", __FILE__);
 
@@ -373,6 +418,7 @@ int main(void) {
   test_pipeline_execution();
   test_export();
   test_job_control_builtins_execution();
+  test_clear_builtin();
 
   test_summary();
   return tests_failed > 0 ? 1 : 0;
