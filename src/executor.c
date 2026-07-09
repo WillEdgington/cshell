@@ -1,7 +1,9 @@
 #define _GNU_SOURCE // expose linux and posix-specific APIs to compiler
 
 #include "cshell/executor.h"
+#include "clib/arena.h"
 #include "cshell/expansion.h"
+#include "cshell/filereader.h"
 #include "cshell/runtime.h"
 #include "cshell/tracker.h"
 
@@ -268,6 +270,28 @@ static int execute_clear(const Command *cmd) {
   return 0;
 }
 
+static int execute_source(const Command *cmd) {
+  if (cmd->arg_count != 2) {
+    fprintf(stderr, "cshell: source: filename argument required\n");
+    shell_r.last_exit_status = 1;
+    return 1;
+  }
+
+  Arena arena;
+  arena_init(&arena, PIPELINE_ARENA_SLAB_SIZE);
+  Pipeline pipe;
+
+  int status = cshell_process_file(cmd->args[1], &pipe, &arena, 1);
+
+  arena_free(&arena);
+  if (status == PATH_NOT_FOUND_STATUS) {
+    fprintf(stderr, "cshell: source: %s: No such file or directory\n",
+            cmd->args[1]);
+    return 1;
+  }
+  return 0;
+}
+
 static void setup_child_io(const Command *cmd, int prev_read_fd,
                            int tunnel[2]) {
   if (prev_read_fd != STDIN_FILENO) {
@@ -338,6 +362,8 @@ static void execute_child_dispatch(const Command *cmd) {
     _exit(execute_bg(cmd));
   case CMD_TYPE_CLEAR:
     _exit(execute_clear(cmd));
+  case CMD_TYPE_SOURCE:
+    _exit(execute_source(cmd));
   default:
     _exit(1);
   }
@@ -516,6 +542,9 @@ CommandType cshell_resolve_command(const Command *cmd) {
     return CMD_TYPE_BG;
   } else if (strcmp(cmd->args[0], "clear") == 0) {
     return CMD_TYPE_CLEAR;
+  } else if (strcmp(cmd->args[0], "source") == 0 ||
+             strcmp(cmd->args[0], ".") == 0) {
+    return CMD_TYPE_SOURCE;
   }
   return CMD_TYPE_EXTERNAL;
 }
@@ -538,6 +567,8 @@ int cshell_execute_command(Command *cmd) {
     return execute_bg(cmd);
   case CMD_TYPE_CLEAR:
     return execute_clear(cmd);
+  case CMD_TYPE_SOURCE:
+    return execute_source(cmd);
   default:
     fprintf(stderr, "cshell: excecute: unknown command type\n");
     return -1;
