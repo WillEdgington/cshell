@@ -213,7 +213,9 @@ To eliminate heap fragmentation, tracking overhead, and complex pointer bookkeep
 The multi-stage execution engine drives an N-stage rolling file descriptor allocation loop. Instead of generating a massive global matrix of pipes ahead of time, standard descriptors are created and rotated progressively. Child contexts copy active boundaries via `dup2`, while rigorous parent-process descriptor hygiene explicitly closes unused write ends to guarantee that pipelines never deadlock or leak descriptors.
 
 ### Hardened Signal Barriers & Synchronous Harvesting
-`cshell` utilises signal blocking barriers around critical process forks and transferring process harvesting ownership entirely to a synchronous tracking engine. Active background jobs are monitored via non-blocking `waitpid(..., WNOHANG)` inquiries executed strictly at the top of the REPL loop, preserving the `SA_RESTART` integrity of your user input streams.
+`cshell` utilises signal blocking barriers around critical process forks and transferring process harvesting ownership entirely to a synchronous tracking engine. To cleanly support background execution control without deadlocks, every forked pipeline context invokes `setpgid` across parent and child scopes to establish distinct process groups.
+
+The parent shell explicitly masks out terminal line disruption signals (`SIGTSTP`, `SIGTTIN`, `SIGTTOU`), gracefully surrendering and reclaiming foreground terminal device group boundaries using `tcsetpgrp()`. Fully intergrated process monitoring occurs cleanly via non-blocking status calls (`waitpid(..., WNOHANG | WUNTRACED | WCONTINUED)`) executed strictly at the top of the REPL loop, preserving the `SA_RESTART` integrity of interactive character-by-character input streams.
 
 ---
 
