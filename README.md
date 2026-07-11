@@ -33,13 +33,21 @@ make clean      # Cleans compiled binaries, .o, and .d files (just for cshell)
 ## Project Structure
 
 ```
-include/cshell/   # Public interface definitions
+include/cshell/       # Public interface definitions
 ├── test_framework.h  # Basic test framework macros
 ├── executor.h        # Pipeline execution, forking, and descriptor hygiene
 ├── expansion.h       # Environment variable token identification and translation
 ├── parser.h          # Lexical analysis and Pipeline/Command AST generation
 ├── prompt.h          # Context-aware path formatting and ANSI escape logic
-└── tracker.h         # Persistent background job tables and state interfaces
+├── tracker.h         # Persistent background job tables and state interfaces
+├── terminal.h        # Raw mode state changes, termios configuration, and teardown
+├── history.h         # Fixed-capacity circular history ring buffer definitions
+├── linereader.h      # ANSI escape state machine and horizontal inline editing
+├── completion.h      # PATH binary and local directory autocomplete scanning
+├── filereader.h      # Consolidated sequential line stream processing engine
+├── handler.h         # Multi-pipeline short-circuit operator dispatcher
+├── startup.h         # Boot configuration sequence initialisation (.cshellrc)
+└── runtime.h         # Central shell runtime limits and exit state registry
 src/                  # Core implementation (.c files)
 tests/                # Per-module unit tests
 ```
@@ -48,10 +56,18 @@ tests/                # Per-module unit tests
 
 ## Native Built-in Commands
 
-To prevent subshell forks from discarding state mutations, `cshell` routes environment and directory manipulations directly to internal system calls within the parent process context.
-- `cd [path]`: Updates the current working directory of the shell via `chdir()`. Supports environment variables (e.g., cd $HOME).
-- `export KEY=VALUE`: Assigns or modifies environment variables in the process environment block via `setenv()`.
-- `exit` (or `CTRL+D`): Cleanly breaks the REPL control loop and terminates the shell.
+To prevent subshell forks from discarding state mutations, `cshell` routes session state management, directory adjustments, and job manipulation directly to internal functions executing within the parent process context.
+
+|Command|Syntax|Operational Summary|
+|---|---|---|
+|`cd`|`cd [path]`|Mutates the current working directory via `chdir()`. Evaluates runtime path expansions (e.g., `cd $HOME`).|
+|`export`|`export KEY=VALUE`|Updates or assigns variables in the session's active environment block via `setenv()`.|
+|`clear`|`clear`|Transmits ANSI screen-erasure codes directly to standard output, resets tracking tabs, and returns status `0`.|
+|`source`/`.`|`source <file>`|Streams and processes external script rows synchronously in-place, allowing commands to alter the active shell environment.|
+|`jobs`|`jobs`|Lists the sequence ID, PID, operational state (`RUNNING`/`STOPPED`), and command text of all background entries.|
+|`fg`|`fg <job_id>`|Restores terminal group ownership to a background task via `tcsetpgrp()`, sends `SIGCONT`, and blocks until foreground completion.|
+|`bg`|`bg <job_id>`|Resumes a suspended background task in place by forwarding `SIGCONT` without altering foreground terminal group status.|
+|`exit`|`exit`|Breaks the interactive REPL execution loop to initiate a graceful shell process teardown.|
 
 ---
 
