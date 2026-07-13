@@ -3,7 +3,7 @@
 *.d
 *.a
 
-# Compiled chttp binary
+# Compiled cshell binary
 cshell
 !cshell/
 
