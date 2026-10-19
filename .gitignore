@@ -9,7 +9,6 @@ cshell
 
 # Dependency/Environment folders
 venv/
-deps/
 
 # Compiled test binaries
 tests/*
